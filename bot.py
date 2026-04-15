@@ -10,7 +10,7 @@ from telegram.ext import (
 from database import init_db, link_account, get_linked_account
 from coc_api import (
     get_player, get_player_stats, get_player_warhits,
-    get_clan, get_clan_members, get_clan_war
+    get_clan, get_clan_war
 )
 
 load_dotenv()
@@ -451,63 +451,231 @@ async def spells_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
+def _role_icon(role: str) -> str:
+    return {"leader": "👑", "coLeader": "🥇", "admin": "🥈", "member": "🥉"}.get(role, "👤")
+
+
+def _build_clan_page1(data: dict) -> str:
+    """Build clan page 1: all clan details."""
+    name = data.get('name', 'Unknown')
+    tag  = data.get('tag', '?')
+    lvl  = data.get('clanLevel', '?')
+    members = data.get('members', 0)
+    pts  = data.get('clanPoints', 0)
+    bb_pts = data.get('clanBuilderBasePoints', 0)
+    req_trophies = data.get('requiredTrophies', 0)
+    req_th = data.get('requiredTownhallLevel', 1)
+    location = data.get('location', {}).get('name', 'International') if data.get('location') else 'International'
+    desc = (data.get('description') or 'No description.').strip()
+
+    # War stats
+    war_wins   = data.get('warWins', 0)
+    war_streak = data.get('warWinStreak', 0)
+    is_public  = data.get('isWarLogPublic', False)
+    war_losses = data.get('warLosses', '?') if is_public else 'Hidden Log'
+    war_freq   = data.get('warFrequency', '?').capitalize()
+
+    # Leagues
+    cwl_league = data.get('warLeague', {}).get('name', 'Unranked') if data.get('warLeague') else 'Unranked'
+    cap_league = data.get('capitalLeague', {}).get('name', '') if data.get('capitalLeague') else ''
+    cap_hall   = data.get('clanCapital', {}).get('capitalHallLevel', '?') if data.get('clanCapital') else '?'
+
+    # Find leader from memberList
+    leader_name = 'Unknown'
+    for m in data.get('memberList', []):
+        if m.get('role') == 'leader':
+            leader_name = m.get('name', 'Unknown')
+            break
+
+    # Win ratio (only if war log public)
+    if is_public:
+        total_wars = war_wins + (data.get('warLosses', 0) + data.get('warTies', 0))
+        ratio = f"{round(war_wins / total_wars * 100, 1)}%" if total_wars > 0 else "0%"
+    else:
+        ratio = "Hidden Log"
+
+    text = (
+        f"🛡️ **{name}**\n"
+        f"`{tag}`\n"
+        f"{'─'*30}\n"
+        f"🏆 {fmt_number(pts)} | 🏅 {fmt_number(bb_pts)}\n"
+        f"Required: 🏆 {req_trophies}  •  🏯 TH{req_th}+\n"
+        f"🌏 Location: {location}\n"
+        f"\n"
+        f"👑 Leader: {leader_name}\n"
+        f"📈 Level: {lvl}\n"
+        f"👥 Members: {members}/50\n"
+        f"\n"
+        f"🌟 CWL: {cwl_league}\n"
+        f"🏛️ Capital Hall: Lv{cap_hall}  •  {cap_league}\n"
+        f"⚔️ War Freq: {war_freq}\n"
+        f"⬆️ Wars Won: {war_wins}\n"
+        f"⬇️ Wars Lost: {war_losses}\n"
+        f"🔥 War Streak: {war_streak}\n"
+        f"📊 Win Ratio: {ratio}\n"
+        f"\n"
+        f"📖 *Description:*\n"
+        f"_{desc}_\n"
+    )
+    return text
+
+
+MEMBERS_PER_PAGE = 15
+
+
+def _build_members_page(data: dict, page: int) -> tuple:
+    """Build a paginated member page. Returns (caption_text, InlineKeyboardMarkup)."""
+    name     = data.get('name', 'Unknown')
+    norm_tag = data.get('tag', '').strip().upper()
+    all_members = sorted(data.get('memberList', []), key=lambda m: m.get('clanRank', 99))
+    total        = len(all_members)
+    total_pages  = max(1, (total + MEMBERS_PER_PAGE - 1) // MEMBERS_PER_PAGE)
+    page         = max(0, min(page, total_pages - 1))
+
+    start        = page * MEMBERS_PER_PAGE
+    end          = min(start + MEMBERS_PER_PAGE, total)
+    page_members = all_members[start:end]
+
+    # ── Caption text ──────────────────────────────────────────────────────
+    text = (
+        f"👥 *{name} — Members ({total}/50)*\n"
+        f"Page {page + 1}/{total_pages}  •  #{start + 1}–{end}\n"
+        f"{'─' * 28}\n"
+    )
+    for m in page_members:
+        rank  = m.get('clanRank', '?')
+        icon  = _role_icon(m.get('role', 'member'))
+        mname = m.get('name', 'Unknown')[:14]
+        th    = m.get('townHallLevel', '?')
+        troph = m.get('trophies', 0)
+        mtag  = m.get('tag', '?')
+        text += f"`{rank}.`{icon} *{mname}*  TH{th} 🏆{troph}\n`    {mtag}`\n"
+
+    # ── Keyboard ──────────────────────────────────────────────────────────
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"clan_members:{norm_tag}:{page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="clan_noop"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("▶️ Next", callback_data=f"clan_members:{norm_tag}:{page + 1}"))
+
+    keyboard = [nav_row, [InlineKeyboardButton("◀️ Clan Details", callback_data=f"clan_p1:{norm_tag}")]]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+
 async def clan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = await _resolve_tag(update, context)
     if not tag:
-        await update.message.reply_text("Please provide a tag or link an account first.")
+        await update.message.reply_text("Please provide a clan tag or link a player account first.")
         return
+
+    # Show a quick loading indicator, then delete it once photo is ready
+    loading = await update.message.reply_text("⏳ Fetching clan data...")
 
     data = await get_clan(tag)
     if "error" in data:
         pdata = await get_player(tag)
         if "error" not in pdata and pdata.get('clan'):
             data = await get_clan(pdata['clan']['tag'])
-        else:
-            await update.message.reply_text("❌ Could not find clan details. Is it a valid clan tag?")
+        if "error" in data:
+            await loading.edit_text("❌ Could not find clan details. Is it a valid clan tag?")
             return
 
-    name = data.get('name', 'Unknown')
-    lvl = data.get('clanLevel', '?')
-    members = data.get('members', 0)
-    pts = data.get('clanPoints', 0)
-    desc = data.get('description', 'No description.')
+    norm_tag = data.get('tag', tag).strip().upper()
+    context.bot_data[f"cdata_{norm_tag}"] = data
 
-    text = (
-        f"🛡️ **{name}** ({data.get('tag')})\n"
-        f"📈 Level: {lvl}\n"
-        f"👥 Members: {members}/50\n"
-        f"🏆 Points: {fmt_number(pts)}\n\n"
-        f"📖 _{desc}_"
-    )
-    await update.message.reply_text(text, parse_mode='Markdown')
+    page1_text = _build_clan_page1(data)
+    keyboard = [[InlineKeyboardButton("👥 Members List", callback_data=f"clan_p2:{norm_tag}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    badge_url = data.get('badgeUrls', {}).get('large', '')
+
+    # Delete the loading text, then send ONE combined photo+caption message
+    await loading.delete()
+    if badge_url:
+        await update.message.reply_photo(
+            photo=badge_url,
+            caption=page1_text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    else:
+        # Fallback if no badge
+        await update.message.reply_text(page1_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def clan_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+
+    # Silently ignore the page-indicator "noop" button
+    if query.data == "clan_noop":
+        await query.answer()
+        return
+
+    await query.answer()
+
+    # Parse: action:tag  OR  action:tag:page
+    parts    = query.data.split(":", 2)
+    action   = parts[0]
+    tag      = parts[1] if len(parts) > 1 else ""
+    page_str = parts[2] if len(parts) > 2 else "0"
+    norm_tag = tag.strip().upper()
+
+    try:
+        page = int(page_str)
+    except ValueError:
+        page = 0
+
+    data = context.bot_data.get(f"cdata_{norm_tag}")
+    if not data:
+        data = await get_clan(norm_tag)
+        if "error" in data:
+            await query.edit_message_caption(caption=f"❌ {data['error']}")
+            return
+        context.bot_data[f"cdata_{norm_tag}"] = data
+
+    # ── Page 1: clan details ──────────────────────────────────────────────
+    if action == "clan_p1":
+        page1_text = _build_clan_page1(data)
+        keyboard   = [[InlineKeyboardButton("👥 Members List", callback_data=f"clan_p2:{norm_tag}")]]
+        await query.edit_message_caption(
+            caption=page1_text, parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # ── Page 2: launch paginated members (page 0) ─────────────────────────
+    elif action == "clan_p2":
+        text, markup = _build_members_page(data, 0)
+        await query.edit_message_caption(
+            caption=text, parse_mode='Markdown', reply_markup=markup
+        )
+
+    # ── Members pagination ────────────────────────────────────────────────
+    elif action == "clan_members":
+        text, markup = _build_members_page(data, page)
+        await query.edit_message_caption(
+            caption=text, parse_mode='Markdown', reply_markup=markup
+        )
 
 
 async def clanmembers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quick shortcut — just sends the member roster as text."""
     tag = await _resolve_tag(update, context)
     if not tag:
         await update.message.reply_text("Please provide a tag or link an account first.")
         return
 
-    data = await get_clan_members(tag)
+    msg = await update.message.reply_text("⏳ Fetching members...")
+    data = await get_clan(tag)
     if "error" in data:
         pdata = await get_player(tag)
         if "error" not in pdata and pdata.get('clan'):
-            data = await get_clan_members(pdata['clan']['tag'])
-        else:
-            await update.message.reply_text("❌ Could not find clan details.")
+            data = await get_clan(pdata['clan']['tag'])
+        if "error" in data:
+            await msg.edit_text("❌ Could not find clan details.")
             return
 
-    member_list = data.get('items', [])
-    if not member_list:
-        await update.message.reply_text("No members found or invalid clan.")
-        return
-
-    text = "👥 **Clan Members:**\n"
-    for m in member_list[:50]:
-        text += f"{m.get('clanRank')}. {m.get('name')} — {m.get('role','').capitalize()} (🏆 {m.get('trophies')})\n"
-    if len(text) > 4000:
-        text = text[:4000] + "...\n"
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await msg.edit_text(_build_clan_page2(data), parse_mode='Markdown')
 
 
 async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -572,8 +740,9 @@ def main():
     app.add_handler(CommandHandler("clanmembers", clanmembers_cmd))
     app.add_handler(CommandHandler("clanwar", clanwar_cmd))
 
-    # Inline page navigation for /player
+    # Inline page navigation
     app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^player_p[12]:"))
+    app.add_handler(CallbackQueryHandler(clan_page_callback,   pattern=r"^(clan_p[12]|clan_members|clan_noop).*"))
 
     logging.info("Starting bot...")
     app.run_polling()
