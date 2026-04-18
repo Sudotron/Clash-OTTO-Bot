@@ -57,7 +57,8 @@ async def get_clan(tag: str):
     return await fetch_coc_data(f"/clans/{format_tag(tag)}")
 
 async def get_player_join_leave(tag: str, limit: int = 15):
-    return await fetch_stats_data(f"/player/{format_tag(tag)}/join-leave?timestamp_start=0&time_stamp_end=9999999999&limit={limit}")
+    # Fetch 250 from API because the API limit returns oldest first; we fetch many and slice locally
+    return await fetch_stats_data(f"/player/{format_tag(tag)}/join-leave?timestamp_start=0&time_stamp_end=9999999999&limit=250")
 
 async def get_clan_members(tag: str):
     return await fetch_coc_data(f"/clans/{format_tag(tag)}/members")
