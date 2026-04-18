@@ -46,12 +46,14 @@ The bot will automatically create a local `users.db` SQLite database to store us
 
 Once the bot is running, interact with it on Telegram:
 
-- `/start` - Start the bot
-- `/link <#TAG>` - Link your Telegram account with your Clash of Clans Player Tag
-- `/player [tag]` - Overview of player stats (uses linked account if no tag provided)
+- `/start` - Start the bot and get a welcome message
+- `/link <#TAG>` - Link your Telegram account with your Clash of Clans Player/Clan Tag
+- `/myid` - View your Telegram User Profile along with all linked player accounts and clans
+- `/player [tag]` - Detailed overview of player stats, plus Clan History navigation
+- `/todo [tag]` - Interactive To-Do List for tracking hero, troop, and spell upgrades
 - `/troops [tag]` - Specific home village troop levels
 - `/heroes [tag]` - Specific hero and hero equipment levels
 - `/spells [tag]` - Specific spell levels
-- `/clan [tag]` - Details about the clan
-- `/clanmembers [tag]` - Member roster for the clan
-- `/clanwar [tag]` - Active clan war info
+- `/clan [tag]` - Details about the clan alongside a paginated offline member roster
+- `/clansorted [tag]` - Sort clan members interactively by Trophies, Town Hall, Donations, Role, or XP Level
+- `/clanwar [tag]` - View current clan war info and detailed war analytics
