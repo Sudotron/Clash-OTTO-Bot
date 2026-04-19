@@ -283,3 +283,8 @@ async def crnttrack_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error fetching clan details: {e}")
+
+
+async def getid_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command to get current user's ID."""
+    await update.message.reply_text(f"Your Telegram ID is: `{update.effective_user.id}`", parse_mode='Markdown')

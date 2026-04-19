@@ -27,7 +27,7 @@ from commands.clan import (
     clan_cmd, clan_page_callback, clanwar_cmd, clansorted_cmd, clansorted_callback, clanwar_analytics_callback
 )
 from commands.tracking import (
-    track_cmd, deltrack_cmd, crnttrack_cmd, setup_coc_client, check_clan_changes
+    track_cmd, deltrack_cmd, crnttrack_cmd, getid_cmd, setup_coc_client, check_clan_changes
 )
 
 
@@ -39,24 +39,24 @@ logging.basicConfig(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "<b>Welcome to Clash OTTO Bot</b> ⚔️\n"
-        "<b>A Clash Of Clans Telegram Bot aiming to cover all possible features & do the heavy lifting so others don’t have to.</b>\n\n"
-        "<b>Commands:</b>\n"
-        "/link <code>#TAG</code> — Link your CoC Account\n"
-        "/myid — View Profile & linked components\n"
-        "/player <code>[tag]</code> — Full player stats\n"
-        "/todo <code>[tag]</code> — To-Do List of character upgrades\n"
-        "/troops <code>[tag]</code> — Troops levels\n"
-        "/heroes <code>[tag]</code> — Heroes and equipment\n"
-        "/spells <code>[tag]</code> — Spells levels\n"
-        "/clan <code>[tag]</code> — Clan details\n"
-        "/clansorted <code>[tag]</code> — Sort clan members interactively\n"
-        "/clanwar <code>[tag]</code> — Current clan war info\n"
-        "\n<b>Tracking:</b>\n"
-        "/track <code>#CLANTAG</code> — Track clan joins/leaves\n"
-        "/deltrack — Stop tracking\n"
-        "/crnttrack — Show tracked clan\n\n"
-        "👑 <b>Bot Owner:</b> <a href='https://t.me/Llowx'>@Llowx</a>"
+        "<b>Welcome to Clash OTTO Bot</b> ⚔️\n\n"
+        "<b>A high-performance bot for Clash Of Clans tracking and analytics.</b>\n\n"
+        "📊 <b>Commands:</b>\n"
+        "• /link <code>#TAG</code> — Link your CoC Account\n"
+        "• /myid — Profile & Linked Accounts\n"
+        "• /player <code>[tag]</code> — Full player stats\n"
+        "• /todo <code>[tag]</code> — Upgrade Progress\n"
+        "• /troops <code>[tag]</code> / /heroes / /spells\n"
+        "• /clan <code>[tag]</code> — Clan Profile & Roster\n"
+        "• /clansorted <code>[tag]</code> — Interactive Roster Sorting\n"
+        "• /clanwar <code>[tag]</code> — War Info & Analytics\n\n"
+        "🛡️ <b>Tracking (Owner only):</b>\n"
+        "• /track <code>#CLANTAG</code> — Start Join/Leave logs\n"
+        "• /deltrack — Stop tracking\n"
+        "• /crnttrack — Tracked Clan Details\n\n"
+        "🆔 <b>Utilities:</b>\n"
+        "• /getid — Get your Telegram ID\n\n"
+        "👑 <b>Owner:</b> <a href='https://t.me/Llowx'>@Llowx</a>"
     )
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -100,6 +100,7 @@ def main():
     app.add_handler(CommandHandler("track", track_cmd))
     app.add_handler(CommandHandler("deltrack", deltrack_cmd))
     app.add_handler(CommandHandler("crnttrack", crnttrack_cmd))
+    app.add_handler(CommandHandler("getid", getid_cmd))
 
     # Inline page navigation
     app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^(player_p[123]|player_history):"))

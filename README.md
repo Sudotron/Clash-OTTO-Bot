@@ -7,6 +7,7 @@ A comprehensive Telegram Bot for Clash of Clans, powered by `python-telegram-bot
 - **Personal Account Linking**: Map your unique Telegram User ID to your CoC Player Tag.
 - **Detailed Player Stats**: Dedicated commands to query general info, home village troops, heroes/equipment, and spells.
 - **Detailed Clan Stats**: Dedicated commands to fetch clan details, the clan member roster, and current war status.
+- **Clan Activity Tracking**: Real-time logs for members joining, leaving, or getting promoted/demoted within a tracked clan.
 - **Fully Asynchronous**: Built with `asyncio`, `aiohttp`, and `aiosqlite` for non-blocking, rapid requests.
 
 ## Setup Instructions
@@ -57,3 +58,12 @@ Once the bot is running, interact with it on Telegram:
 - `/clan [tag]` - Details about the clan alongside a paginated offline member roster
 - `/clansorted [tag]` - Sort clan members interactively by Trophies, Town Hall, Donations, Role, or XP Level
 - `/clanwar [tag]` - View current clan war info and detailed war analytics
+
+### 🛡️ Clan Tracking
+- `/track <#CLANTAG>` - Start tracking a clan for join/leave/promotion events (Owner only)
+- `/deltrack` - Stop tracking the current clan (Owner only)
+- `/crnttrack` - Show details of the currently tracked clan
+- `/getid` - Get your Telegram User ID
+
+---
+**Clash OTTO Bot** | Built for the Clash of Clans Telegram community.
