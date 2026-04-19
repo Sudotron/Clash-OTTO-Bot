@@ -1,10 +1,25 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os
+import asyncio
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from coc_api import get_player, get_player_stats, get_player_warhits, get_clan, get_player_join_leave
-from commands.utils import E, _resolve_tag, _build_player_page1, _build_player_page2
+from commands.utils import E, _resolve_tag, _build_player_page1, _build_player_page2, _build_player_page3
 from database import get_all_linked_tags
+
+# ── Path to processed TownHall images (grey bg, compressed) ─────────────────
+TH_IMAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "TownHalls_processed")
+
+# Disable link previews globally for player messages
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+def _get_th_image_path(th_level) -> str | None:
+    """Return the path to the Town Hall image for the given level, or None."""
+    path = os.path.join(TH_IMAGE_DIR, f"TownHall_{th_level}.png")
+    return path if os.path.isfile(path) else None
+
 
 async def player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = await _resolve_tag(update, context)
@@ -15,13 +30,16 @@ async def player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     msg = await update.message.reply_text("⏳ Diving into the game to fetch player data...")
 
-    data = await get_player(tag)
+    # Fetch all data in parallel for speed
+    data, stats, warhits = await asyncio.gather(
+        get_player(tag),
+        get_player_stats(tag),
+        get_player_warhits(tag)
+    )
+
     if "error" in data:
         await msg.edit_text(f"❌ {data['error']}")
         return
-
-    stats = await get_player_stats(tag)
-    warhits = await get_player_warhits(tag)
 
     norm_tag = tag.strip().upper()
     context.bot_data[f"pdata_{norm_tag}"] = (data, stats, warhits)
@@ -30,11 +48,25 @@ async def player_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("🛡️ Clan History", callback_data=f"player_history:{norm_tag}")],
-        [InlineKeyboardButton(f"{E['next']} Troops & Heroes", callback_data=f"player_p2:{norm_tag}")]
+        [InlineKeyboardButton(f"{E['next']} Troops & Spells", callback_data=f"player_p2:{norm_tag}")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await msg.edit_text(page1_text, parse_mode='Markdown', reply_markup=reply_markup)
+    # Delete the loading message
+    await msg.delete()
+
+    # Send TH image first, then info text below it
+    th_level = data.get('townHallLevel', 1)
+    th_image = _get_th_image_path(th_level)
+
+    if th_image:
+        with open(th_image, 'rb') as img:
+            await update.message.reply_photo(photo=img)
+
+    await update.message.reply_text(
+        page1_text, parse_mode='Markdown',
+        reply_markup=reply_markup, link_preview_options=NO_PREVIEW
+    )
 
 
 async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,12 +93,14 @@ async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             context.bot_data[f"pdata_{norm_tag}"] = (data, stats, warhits)
 
         page2_text = _build_player_page2(data)
-        keyboard = [[
-            InlineKeyboardButton(f"{E['back']} Season Stats", callback_data=f"player_p1:{norm_tag}")
-        ]]
+        keyboard = [
+            [InlineKeyboardButton(f"{E['back']} Season Stats", callback_data=f"player_p1:{norm_tag}"),
+             InlineKeyboardButton(f"{E['next']} Heroes", callback_data=f"player_p3:{norm_tag}")]
+        ]
         await query.edit_message_text(
             page2_text, parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            link_preview_options=NO_PREVIEW
         )
 
     elif action == "player_p1":
@@ -84,11 +118,34 @@ async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         page1_text = _build_player_page1(data, stats, warhits, norm_tag)
         keyboard = [
             [InlineKeyboardButton("🛡️ Clan History", callback_data=f"player_history:{norm_tag}")],
-            [InlineKeyboardButton(f"{E['next']} Troops & Heroes", callback_data=f"player_p2:{norm_tag}")]
+            [InlineKeyboardButton(f"{E['next']} Troops & Spells", callback_data=f"player_p2:{norm_tag}")]
         ]
         await query.edit_message_text(
             page1_text, parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            link_preview_options=NO_PREVIEW
+        )
+
+    elif action == "player_p3":
+        if cached:
+            data, stats, warhits = cached
+        else:
+            data = await get_player(tag)
+            stats = await get_player_stats(tag)
+            warhits = await get_player_warhits(tag)
+            if "error" in data:
+                await query.edit_message_text(f"❌ {data['error']}")
+                return
+            context.bot_data[f"pdata_{norm_tag}"] = (data, stats, warhits)
+
+        page3_text = _build_player_page3(data)
+        keyboard = [[
+            InlineKeyboardButton(f"{E['back']} Troops & Spells", callback_data=f"player_p2:{norm_tag}")
+        ]]
+        await query.edit_message_text(
+            page3_text, parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            link_preview_options=NO_PREVIEW
         )
 
     elif action == "player_history":
@@ -125,7 +182,7 @@ async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             text += f"📅 {t_str}\n\n"
             
         keyboard = [[InlineKeyboardButton(f"{E['back']} Back to Profile", callback_data=f"player_p1:{norm_tag}")]]
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard), link_preview_options=NO_PREVIEW)
 
 
 async def troops_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

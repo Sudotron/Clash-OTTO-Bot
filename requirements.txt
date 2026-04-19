@@ -1,3 +1,6 @@
-python-telegram-bot>=21.0
+python-telegram-bot[job-queue]>=21.0
 python-dotenv==1.0.0
 aiosqlite==0.19.0
+Pillow>=10.0
+coc.py==4.0.0
+httpx

@@ -180,16 +180,14 @@ def _build_player_page1(data: dict, stats: dict, warhits: dict, tag: str) -> str
 
 
 def _build_player_page2(data: dict) -> str:
-    """Build page 2: Troops, Siege Machines, Spells, Heroes & Equipment."""
+    """Build page 2: Troops, Siege Machines & Spells."""
     name = data.get('name', 'Unknown')
     th = data.get('townHallLevel', '?')
 
     troops_all = data.get('troops', [])
-    heroes_all = data.get('heroes', [])
-    equipment = data.get('heroEquipment', [])
     spells_all = data.get('spells', [])
 
-    # Home village troops (exclude super-troop duplicates by filtering `superTroopIsActive` not in original list)
+    # Home village troops (exclude super-troop duplicates)
     home_troops = [t for t in troops_all if t.get('village') == 'home' and 'Super' not in t.get('name','') and not t.get('name','').startswith('Super')]
     siege_machines = [t for t in troops_all if t.get('village') == 'home' and t.get('name') in [
         'Wall Wrecker','Battle Blimp','Stone Slammer','Siege Barracks','Log Launcher','Flame Flinger','Battle Drill'
@@ -199,7 +197,6 @@ def _build_player_page2(data: dict) -> str:
     home_troops = [t for t in home_troops if t['name'] not in siege_names]
 
     home_spells = [s for s in spells_all if s.get('village') == 'home']
-    home_heroes = [h for h in heroes_all if h.get('village') == 'home']
 
     def troop_lines(items: list) -> str:
         if not items:
@@ -216,7 +213,7 @@ def _build_player_page2(data: dict) -> str:
         return lines
 
     text = (
-        f"{E['th']} **{name} | TH{th} — Troop Details**\n"
+        f"{E['th']} **{name} | TH{th} — Troops & Spells**\n"
         f"{'─' * 30}\n"
         f"\n{E['troop']} **Home Troops:**\n"
     )
@@ -229,7 +226,24 @@ def _build_player_page2(data: dict) -> str:
     text += f"\n{E['spell']} **Spells:**\n"
     text += troop_lines(home_spells)
 
-    text += f"\n{E['hero']} **Heroes:**\n"
+    return text
+
+
+def _build_player_page3(data: dict) -> str:
+    """Build page 3: Heroes, Hero Equipment & Builder Base Heroes."""
+    name = data.get('name', 'Unknown')
+    th = data.get('townHallLevel', '?')
+
+    heroes_all = data.get('heroes', [])
+    equipment = data.get('heroEquipment', [])
+
+    home_heroes = [h for h in heroes_all if h.get('village') == 'home']
+
+    text = (
+        f"{E['th']} **{name} | TH{th} — Heroes & Equipment**\n"
+        f"{'─' * 30}\n"
+        f"\n{E['hero']} **Heroes:**\n"
+    )
     if home_heroes:
         for h in home_heroes:
             lvl = h.get('level', '?')

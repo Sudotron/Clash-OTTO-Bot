@@ -26,6 +26,9 @@ from commands.player import (
 from commands.clan import (
     clan_cmd, clan_page_callback, clanwar_cmd, clansorted_cmd, clansorted_callback, clanwar_analytics_callback
 )
+from commands.tracking import (
+    track_cmd, deltrack_cmd, crnttrack_cmd, setup_coc_client, check_clan_changes
+)
 
 
 logging.basicConfig(
@@ -48,7 +51,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/spells <code>[tag]</code> — Spells levels\n"
         "/clan <code>[tag]</code> — Clan details\n"
         "/clansorted <code>[tag]</code> — Sort clan members interactively\n"
-        "/clanwar <code>[tag]</code> — Current clan war info\n\n"
+        "/clanwar <code>[tag]</code> — Current clan war info\n"
+        "\n<b>Tracking:</b>\n"
+        "/track <code>#CLANTAG</code> — Track clan joins/leaves\n"
+        "/deltrack — Stop tracking\n"
+        "/crnttrack — Show tracked clan\n\n"
         "👑 <b>Bot Owner:</b> <a href='https://t.me/Llowx'>@Llowx</a>"
     )
     
@@ -75,7 +82,7 @@ def main():
     import asyncio
     asyncio.run(init_db())
 
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(setup_coc_client).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("link", link_cmd))
@@ -89,13 +96,21 @@ def main():
     app.add_handler(CommandHandler("clanwar", clanwar_cmd))
     app.add_handler(CommandHandler("myid", myid_cmd))
 
+    # Tracking commands
+    app.add_handler(CommandHandler("track", track_cmd))
+    app.add_handler(CommandHandler("deltrack", deltrack_cmd))
+    app.add_handler(CommandHandler("crnttrack", crnttrack_cmd))
+
     # Inline page navigation
-    app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^(player_p[12]|player_history):"))
+    app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^(player_p[123]|player_history):"))
     app.add_handler(CallbackQueryHandler(todo_page_callback,   pattern=r"^todo_p:.*"))
     app.add_handler(CallbackQueryHandler(clan_page_callback,   pattern=r"^(clan_p[12]|clan_members|clan_noop).*"))
     app.add_handler(CallbackQueryHandler(clansorted_callback,  pattern=r"^clansort:.*"))
     app.add_handler(CallbackQueryHandler(clanwar_analytics_callback, pattern=r"^cwar_a:.*"))
     app.add_handler(CallbackQueryHandler(myid_callback,        pattern=r"^myid:.*"))
+
+    # Background job: check clan changes every 30 seconds
+    app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)
 
     logging.info("Starting bot...")
     app.run_polling()
