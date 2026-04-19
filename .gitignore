@@ -49,3 +49,7 @@ htmlcov/
 
 # ── Jupyter ──────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
+
+
+# Data
+clan_data.json
