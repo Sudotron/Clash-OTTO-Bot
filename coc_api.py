@@ -68,3 +68,17 @@ async def get_clan_war(tag: str):
 
 async def get_previous_wars(tag: str, limit: int = 2):
     return await fetch_stats_data(f"/war/{format_tag(tag)}/previous?limit={limit}")
+
+async def get_cwl_group(tag: str):
+    """Fetch CWL league group info (rounds + war tags) for a clan."""
+    return await fetch_coc_data(f"/clans/{format_tag(tag)}/currentwar/leaguegroup")
+
+async def get_cwl_war(war_tag: str):
+    """Fetch individual CWL round war data by war tag."""
+    return await fetch_coc_data(f"/clanwarleagues/wars/{format_tag(war_tag)}")
+
+async def search_clans(min_clan_level: int = 10, min_clan_points: int = 35000, limit: int = 50) -> dict:
+    """Search clans with high level/points — used for /raidclans capital hall filtering."""
+    return await fetch_coc_data(
+        f"/clans?minClanLevel={min_clan_level}&minClanPoints={min_clan_points}&limit={limit}"
+    )

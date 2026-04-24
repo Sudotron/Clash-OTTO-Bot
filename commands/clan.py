@@ -1,10 +1,17 @@
 import asyncio
+import os
+from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
-from coc_api import get_clan, get_player, get_clan_war, get_previous_wars
+from coc_api import (
+    get_clan, get_player, get_clan_war, get_previous_wars,
+    get_cwl_group, get_cwl_war, search_clans
+)
 from commands.utils import E, _resolve_tag, _build_clan_page1, _build_members_page
+
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 async def clan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = await _resolve_tag(update, context, entity_type='clan')
@@ -38,7 +45,7 @@ async def clan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=badge_url, caption=page1_text, parse_mode='Markdown', reply_markup=reply_markup
         )
     else:
-        await update.message.reply_text(page1_text, parse_mode='Markdown', reply_markup=reply_markup)
+        await update.message.reply_text(page1_text, parse_mode='Markdown', reply_markup=reply_markup, disable_web_page_preview=True)
 
 
 async def clan_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,6 +93,53 @@ async def clan_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _parse_coc_time(ts: str) -> datetime | None:
+    """Parse CoC API timestamp '20250501T120000.000Z' -> UTC datetime."""
+    if not ts:
+        return None
+    try:
+        return datetime.strptime(ts, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _fmt_remaining(dt: datetime | None, state: str) -> str:
+    """Return a human-readable time remaining string, or empty string."""
+    if not dt:
+        return ""
+    now = datetime.now(timezone.utc)
+    diff = dt - now
+    total_sec = int(diff.total_seconds())
+    if total_sec <= 0:
+        return ""
+    hours, rem = divmod(total_sec, 3600)
+    minutes = rem // 60
+    if hours >= 24:
+        days = hours // 24
+        t_str = f"{days}d {hours % 24}h"
+    else:
+        t_str = f"{hours}h {minutes}m"
+        
+    if state == 'preparation':
+        return f"\n⏳ Preparation time left: *{t_str}*"
+    else:
+        return f"\n⏰ Remaining time: *{t_str}*"
+
+
+def _attack_progress(war_data: dict) -> str:
+    """Return attack count bar e.g. ⚔️ Attacks: 24/30."""
+    team_size = war_data.get('teamSize', 0) or 0
+    attacks_per = war_data.get('attacksPerMember', 2)
+    total_possible = team_size * attacks_per
+    members = war_data.get('clan', {}).get('members', [])
+    used = sum(len(m.get('attacks', [])) for m in members)
+    bar_filled = int((used / total_possible) * 10) if total_possible else 0
+    bar = '█' * bar_filled + '░' * (10 - bar_filled)
+    return f"\n⚔️ Attacks: `{used}/{total_possible}` [{bar}]"
+
+
 async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tag = await _resolve_tag(update, context, entity_type='clan')
     if not tag:
@@ -123,18 +177,21 @@ async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if badge_url:
                     await update.message.reply_photo(photo=badge_url, caption=text, parse_mode='Markdown')
                 else:
-                    await update.message.reply_text(text, parse_mode='Markdown')
+                    await update.message.reply_text(text, parse_mode='Markdown', disable_web_page_preview=True)
                 return
         
         if "error" in war_data:
-            await msg.edit_text(f"❌ Could not find war details.\nReason: _{war_data.get('error')}_\n*(If you just made your log public, Clash API may take a few minutes to update its cache!)*", parse_mode='Markdown')
+            await msg.edit_text(
+                f"❌ Could not find war details.\nReason: _{war_data.get('error')}_\n"
+                "*(If you just made your log public, Clash API may take a few minutes to update its cache!)*",
+                parse_mode='Markdown'
+            )
             return
 
     norm_tag = war_data.get('clan', {}).get('tag', tag).strip().upper()
     
     state = war_data.get('state')
     if state == 'notInWar':
-        # Fetch previous wars!
         prev_wars = await get_previous_wars(norm_tag, limit=2)
         items = prev_wars.get('items', [])
         
@@ -148,37 +205,80 @@ async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wn = w.get('clan', {}).get('name', 'Clan')
             on = w.get('opponent', {}).get('name', 'Opponent')
             ws = w.get('clan', {}).get('stars', 0)
-            os = w.get('opponent', {}).get('stars', 0)
-            res = "Victory" if ws > os else "Defeat" if os > ws else "Draw"
+            os_ = w.get('opponent', {}).get('stars', 0)
+            res = "🏆 Victory" if ws > os_ else "💀 Defeat" if os_ > ws else "🤝 Draw"
             
             text += f"**War {i+1}: {wn} vs {on}**\n"
-            text += f"🏆 Result: {res} | ⭐ {ws} - {os}\n\n"
+            text += f"{res} | ⭐ {ws} — {os_}\n\n"
             keyboard.append([InlineKeyboardButton(f"📊 War {i+1} Analytics", callback_data=f"cwar_a:home:{norm_tag}:{i}:0")])
             
-        await msg.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+        await msg.edit_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
         return
 
-    clan_name = war_data.get('clan', {}).get('name', 'Unknown')
+    clan_name  = war_data.get('clan', {}).get('name', 'Unknown')
     clan_stars = war_data.get('clan', {}).get('stars', 0)
-    clan_dest = war_data.get('clan', {}).get('destructionPercentage', 0)
-    opp_name = war_data.get('opponent', {}).get('name', 'Unknown')
-    opp_stars = war_data.get('opponent', {}).get('stars', 0)
-    opp_dest = war_data.get('opponent', {}).get('destructionPercentage', 0)
-    team_size = war_data.get('teamSize', '?')
+    clan_dest  = war_data.get('clan', {}).get('destructionPercentage', 0)
+    opp_name   = war_data.get('opponent', {}).get('name', 'Unknown')
+    opp_stars  = war_data.get('opponent', {}).get('stars', 0)
+    opp_dest   = war_data.get('opponent', {}).get('destructionPercentage', 0)
+    team_size  = war_data.get('teamSize', '?')
+
+    # ── Time remaining ──
+    if state == 'preparation':
+        start_dt = _parse_coc_time(war_data.get('startTime', ''))
+        time_str = _fmt_remaining(start_dt, "preparation")
+        state_label = "⚙️ Preparation"
+    elif state == 'inWar':
+        end_dt = _parse_coc_time(war_data.get('endTime', ''))
+        time_str = _fmt_remaining(end_dt, "inWar")
+        state_label = "🔥 In War"
+    elif state == 'warEnded':
+        end_dt = _parse_coc_time(war_data.get('endTime', ''))
+        if end_dt:
+            ist_dt = end_dt + timedelta(hours=5, minutes=30)
+            time_str = f"\n⏰ War ended at: *{ist_dt.strftime('%H:%M')} IST*"
+        else:
+            time_str = "\n⏰ War ended"
+        state_label = "War Ended"
+    else:
+        time_str = ""
+        state_label = state.capitalize() if state else "Unknown"
+
+    # ── Determine result if war ended ──
+    if state == 'warEnded':
+        if clan_stars > opp_stars:
+            result_line = "\n🏆 **Result: VICTORY!**"
+        elif opp_stars > clan_stars:
+            result_line = "\n💀 **Result: DEFEAT**"
+        else:
+            if clan_dest > opp_dest:
+                result_line = "\n🏆 **Result: VICTORY! (Destruction tiebreak)**"
+            elif opp_dest > clan_dest:
+                result_line = "\n💀 **Result: DEFEAT (Destruction tiebreak)**"
+            else:
+                result_line = "\n🤝 **Result: DRAW**"
+    else:
+        result_line = ""
 
     text = (
-        f"⚔️ **Clan War — {state.capitalize() if state else 'Unknown'}**\n"
-        f"👥 Size: {team_size}v{team_size}\n\n"
+        f"⚔️ **Clan War — {state_label}**\n"
+        f"👥 Size: {team_size}v{team_size}"
+        f"{time_str}"
+        f"{result_line}\n"
+        f"{'─' * 30}\n"
         f"🛡️ **{clan_name}**\n"
         f"  ⭐ Stars: {clan_stars}   💥 Dest: {clan_dest:.1f}%\n\n"
         f"🏴 **{opp_name}**\n"
         f"  ⭐ Stars: {opp_stars}   💥 Dest: {opp_dest:.1f}%\n"
     )
     
-    keyboard = [[InlineKeyboardButton("📊 War Analytics", callback_data=f"cwar_a:home:{norm_tag}:live:0")]]
+    keyboard = [[
+        InlineKeyboardButton("📊 Analytics", callback_data=f"cwar_a:home:{norm_tag}:live:0"),
+        InlineKeyboardButton("🗡️ Attacks", callback_data=f"cwar_a:attacks:{norm_tag}:live:0")
+    ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await msg.edit_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    await msg.edit_text(text, parse_mode='Markdown', reply_markup=reply_markup, disable_web_page_preview=True)
 
 
 def _cwar_analytics_markup(view: str, tag: str, war_index: str, current_page: int, total_pages: int):
@@ -200,6 +300,7 @@ def _cwar_analytics_markup(view: str, tag: str, war_index: str, current_page: in
             InlineKeyboardButton("⭐ Stars", callback_data=f"cwar_a:stars:{act_tag}:{war_index}:0")
         ],
         [
+            InlineKeyboardButton("🗡️ All Attacks", callback_data=f"cwar_a:attacks:{act_tag}:{war_index}:0"),
             InlineKeyboardButton("◀️ War Overview", callback_data=f"cwar_a:home:{act_tag}:{war_index}:0")
         ]
     ])
@@ -250,7 +351,7 @@ async def clanwar_analytics_callback(update: Update, context: ContextTypes.DEFAU
             f"🏴 **{opp_name}**\n"
             f"  ⭐ Stars: {opp_stars}   💥 Dest: {opp_dest:.1f}%\n"
         )
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_cwar_analytics_markup(view, norm_tag, war_index, 0, 1))
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_cwar_analytics_markup(view, norm_tag, war_index, 0, 1), disable_web_page_preview=True)
         return
 
     members = war_data.get('clan', {}).get('members', [])
@@ -302,14 +403,54 @@ async def clanwar_analytics_callback(update: Update, context: ContextTypes.DEFAU
         else:
             lines.extend(stars)
 
+    elif view == "attacks":
+        lines.append(f"🗡️ **War Analytics — All Attacks**\n{'─'*28}\n")
+        all_attacks_raw = []
+        all_members = war_data.get('clan', {}).get('members', []) + war_data.get('opponent', {}).get('members', [])
+        member_map = {m.get('tag', ''): m for m in all_members}
+        
+        for m in war_data.get('clan', {}).get('members', []):
+            mname = m.get('name', 'Unknown')
+            mth   = m.get('townhallLevel', '?')
+            for atk in m.get('attacks', []):
+                defender = member_map.get(atk.get('defenderTag', ''), {})
+                dname = defender.get('name', 'Unknown')
+                dth   = defender.get('townhallLevel', '?')
+                st    = atk.get('stars', 0)
+                dest  = atk.get('destructionPercentage', 0)
+                order = atk.get('order', 999)
+                stars_str = '⭐' * st if st > 0 else '☆'
+                all_attacks_raw.append((order, f"`{order}.` {mname}(Th{mth}) ─────> {dname}(Th{dth}) {stars_str} ({dest}%)"))
+                
+        for o in war_data.get('opponent', {}).get('members', []):
+            oname = o.get('name', 'Unknown')
+            oth   = o.get('townhallLevel', '?')
+            for atk in o.get('attacks', []):
+                defender = member_map.get(atk.get('defenderTag', ''), {})
+                dname = defender.get('name', 'Unknown')
+                dth   = defender.get('townhallLevel', '?')
+                st    = atk.get('stars', 0)
+                dest  = atk.get('destructionPercentage', 0)
+                order = atk.get('order', 999)
+                stars_str = '⭐' * st if st > 0 else '☆'
+                all_attacks_raw.append((order, f"`{order}.` {dname}(Th{dth}) <───── {oname}(Th{oth}) {stars_str} ({dest}%)"))
+
+        all_attacks_raw.sort(key=lambda x: x[0])
+        all_attacks = [x[1] for x in all_attacks_raw]
+
+        if not all_attacks:
+            lines.append("❌ No attacks recorded yet.")
+        else:
+            lines.extend(all_attacks)
+
     chunks = []
     cur = ""
-    for l in lines:
-        if len(cur) + len(l) > 3800:
+    for ln in lines:
+        if len(cur) + len(ln) > 3800:
             chunks.append(cur)
-            cur = l + "\n"
+            cur = ln + "\n"
         else:
-            cur += l + "\n"
+            cur += ln + "\n"
     if cur: chunks.append(cur)
     
     total_pages = len(chunks) if chunks else 1
@@ -319,7 +460,7 @@ async def clanwar_analytics_callback(update: Update, context: ContextTypes.DEFAU
     if total_pages > 1:
         text += f"\n_Page {safe_page + 1} of {total_pages}_"
         
-    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_cwar_analytics_markup(view, norm_tag, war_index, safe_page, total_pages))
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_cwar_analytics_markup(view, norm_tag, war_index, safe_page, total_pages), disable_web_page_preview=True)
 
 
 def _clansorted_markup(tag: str):
@@ -404,4 +545,269 @@ async def clansorted_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         text += f"`{i+1}.` {mname} — {format_val(m)}\n"
 
     await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_clansorted_markup(norm_tag))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# /cwl — Clan War League
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _cwl_round_markup(tag: str, round_idx: int, total_rounds: int, view: str = "round") -> InlineKeyboardMarkup:
+    """Navigation keyboard for CWL rounds."""
+    nav = []
+    if round_idx > 0:
+        nav.append(InlineKeyboardButton("◀️ Prev Round", callback_data=f"cwl_r:{view}:{tag}:{round_idx - 1}"))
+    if round_idx < total_rounds - 1:
+        nav.append(InlineKeyboardButton("Next Round ▶️", callback_data=f"cwl_r:{view}:{tag}:{round_idx + 1}"))
+    keyboard = []
+    if nav:
+        keyboard.append(nav)
+    keyboard.append([
+        InlineKeyboardButton("📋 Group Overview", callback_data=f"cwl_r:overview:{tag}:0"),
+        InlineKeyboardButton("🗡️ Attacks", callback_data=f"cwl_r:attacks:{tag}:{round_idx}"),
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def _cwl_overview_text(group: dict, clan_tag: str) -> str:
+    """Build CWL group overview: season, participating clans, round info."""
+    season = group.get('season', 'Unknown Season')
+    clans  = group.get('clans', [])
+    rounds = group.get('rounds', [])
+    total_rounds = len(rounds)
+    completed = sum(1 for r in rounds if any(wt != "#0" for wt in r.get('warTags', [])))
+
+    text = (
+        f"🌟 **Clan War League — {season}**\n"
+        f"{'─' * 30}\n"
+        f"📅 Rounds: {completed}/{total_rounds} completed\n"
+        f"👥 Participating Clans ({len(clans)}):\n"
+    )
+    for i, c in enumerate(clans):
+        ctag  = c.get('tag', '?')
+        cname = c.get('name', 'Unknown')
+        clvl  = c.get('clanLevel', '?')
+        icon  = "🏆" if ctag.upper() == clan_tag.upper() else "🛡️"
+        text += f"  {icon} `{i+1}.` **{cname}** (Lvl {clvl}) `{ctag}`\n"
+    return text
+
+
+async def cwl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tag = await _resolve_tag(update, context, entity_type='clan')
+    if not tag:
+        await update.message.reply_text(
+            "Please provide a clan tag or link a clan/player account first.\n"
+            "Usage: `/cwl #CLANTAG`", parse_mode='Markdown'
+        )
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    msg = await update.message.reply_text("🌟 Fetching CWL group data...")
+
+    # If player tag given, resolve to clan tag
+    pdata = await get_player(tag)
+    if "error" not in pdata and pdata.get('clan'):
+        tag = pdata['clan']['tag']
+
+    norm_tag = tag.strip().upper()
+    group = await get_cwl_group(norm_tag)
+
+    if "error" in group:
+        await msg.edit_text(
+            "❌ CWL data not available.\n\n"
+            "_CWL only runs for the first ~10 days of each month. "
+            "Outside that window, or if the clan is not participating, no data is returned._",
+            parse_mode='Markdown'
+        )
+        return
+
+    context.bot_data[f"cwl_{norm_tag}"] = group
+
+    overview_text = _cwl_overview_text(group, norm_tag)
+    rounds = group.get('rounds', [])
+    total_rounds = len(rounds)
+
+    # Find latest active round
+    latest = 0
+    for i, r in enumerate(rounds):
+        if any(wt != "#0" for wt in r.get('warTags', [])):
+            latest = i
+
+    keyboard = []
+    if total_rounds > 0:
+        keyboard.append([InlineKeyboardButton(
+            f"⚔️ View Round {latest + 1}",
+            callback_data=f"cwl_r:round:{norm_tag}:{latest}"
+        )])
+
+    await msg.edit_text(
+        overview_text, parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+        disable_web_page_preview=True
+    )
+
+
+async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts     = query.data.split(":", 3)   # cwl_r:view:tag:round_idx
+    view      = parts[1] if len(parts) > 1 else "overview"
+    tag       = parts[2] if len(parts) > 2 else ""
+    norm_tag  = tag.strip().upper()
+    round_idx = int(parts[3]) if len(parts) > 3 else 0
+
+    group = context.bot_data.get(f"cwl_{norm_tag}")
+    if not group:
+        group = await get_cwl_group(norm_tag)
+        if "error" in group:
+            await query.edit_message_text("❌ CWL data expired. Run `/cwl` again.", parse_mode='Markdown')
+            return
+        context.bot_data[f"cwl_{norm_tag}"] = group
+
+    rounds       = group.get('rounds', [])
+    total_rounds = len(rounds)
+
+    if view == "overview":
+        text = _cwl_overview_text(group, norm_tag)
+        latest = 0
+        for i, r in enumerate(rounds):
+            if any(wt != "#0" for wt in r.get('warTags', [])):
+                latest = i
+        kb = [[InlineKeyboardButton(f"⚔️ View Round {latest + 1}", callback_data=f"cwl_r:round:{norm_tag}:{latest}")]] if total_rounds > 0 else []
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb) if kb else None, disable_web_page_preview=True)
+        return
+
+    if round_idx >= total_rounds:
+        await query.edit_message_text("❌ Round not found.")
+        return
+
+    round_data = rounds[round_idx]
+    war_tags   = [wt for wt in round_data.get('warTags', []) if wt != "#0"]
+
+    if not war_tags:
+        await query.edit_message_text(
+            f"⏳ Round {round_idx + 1} hasn't started yet.",
+            reply_markup=_cwl_round_markup(norm_tag, round_idx, total_rounds, view)
+        )
+        return
+
+    # Find the war that involves our clan
+    our_war = None
+    for wt in war_tags:
+        wdata = await get_cwl_war(wt)
+        if "error" not in wdata:
+            c_tag = wdata.get('clan', {}).get('tag', '').upper()
+            o_tag = wdata.get('opponent', {}).get('tag', '').upper()
+            if norm_tag in (c_tag, o_tag):
+                if o_tag == norm_tag:
+                    wdata['clan'], wdata['opponent'] = wdata['opponent'], wdata['clan']
+                our_war = wdata
+                break
+
+    if not our_war:
+        our_war = await get_cwl_war(war_tags[0])
+
+    if not our_war or "error" in our_war:
+        await query.edit_message_text(
+            f"❌ Could not load Round {round_idx + 1} war data.",
+            reply_markup=_cwl_round_markup(norm_tag, round_idx, total_rounds, view)
+        )
+        return
+
+    c_name  = our_war.get('clan', {}).get('name', 'Clan')
+    c_stars = our_war.get('clan', {}).get('stars', 0)
+    c_dest  = our_war.get('clan', {}).get('destructionPercentage', 0)
+    o_name  = our_war.get('opponent', {}).get('name', 'Opponent')
+    o_stars = our_war.get('opponent', {}).get('stars', 0)
+    o_dest  = our_war.get('opponent', {}).get('destructionPercentage', 0)
+    w_state = our_war.get('state', 'unknown')
+    w_size  = our_war.get('teamSize', '?')
+
+    if w_state == 'preparation':
+        s_dt = _parse_coc_time(our_war.get('startTime', ''))
+        time_str    = _fmt_remaining(s_dt, "preparation")
+        state_label = "⚙️ Preparation"
+    elif w_state == 'inWar':
+        e_dt = _parse_coc_time(our_war.get('endTime', ''))
+        time_str    = _fmt_remaining(e_dt, "inWar")
+        state_label = "🔥 In War"
+    elif w_state == 'warEnded':
+        e_dt = _parse_coc_time(our_war.get('endTime', ''))
+        if e_dt:
+            ist_dt = e_dt + timedelta(hours=5, minutes=30)
+            time_str = f"\n⏰ War ended at: *{ist_dt.strftime('%H:%M')} IST*"
+        else:
+            time_str = "\n⏰ War ended"
+        state_label = "War Ended"
+    else:
+        time_str    = ""
+        state_label = w_state.capitalize()
+
+    if w_state == 'warEnded':
+        result_line = f"\n{'🏆 Victory' if c_stars > o_stars else '💀 Defeat' if o_stars > c_stars else '🤝 Draw'}"
+    else:
+        result_line = ""
+
+    if view == "attacks":
+        lines = [f"🗡️ **CWL Round {round_idx + 1} — All Attacks**\n{'─'*28}\n"]
+        all_attacks_raw = []
+        all_members = our_war.get('clan', {}).get('members', []) + our_war.get('opponent', {}).get('members', [])
+        member_map  = {m.get('tag', ''): m for m in all_members}
+        
+        for m in our_war.get('clan', {}).get('members', []):
+            mname = m.get('name', 'Unknown')
+            mth   = m.get('townhallLevel', '?')
+            for atk in m.get('attacks', []):
+                defender = member_map.get(atk.get('defenderTag', ''), {})
+                dname = defender.get('name', 'Unknown')
+                dth   = defender.get('townhallLevel', '?')
+                st    = atk.get('stars', 0)
+                dest  = atk.get('destructionPercentage', 0)
+                order = atk.get('order', 999)
+                stars_str = '⭐' * st if st > 0 else '☆'
+                all_attacks_raw.append((order, f"`{order}.` {mname}(Th{mth}) ─────> {dname}(Th{dth}) {stars_str} ({dest}%)"))
+
+        for o in our_war.get('opponent', {}).get('members', []):
+            oname = o.get('name', 'Unknown')
+            oth   = o.get('townhallLevel', '?')
+            for atk in o.get('attacks', []):
+                defender = member_map.get(atk.get('defenderTag', ''), {})
+                dname = defender.get('name', 'Unknown')
+                dth   = defender.get('townhallLevel', '?')
+                st    = atk.get('stars', 0)
+                dest  = atk.get('destructionPercentage', 0)
+                order = atk.get('order', 999)
+                stars_str = '⭐' * st if st > 0 else '☆'
+                all_attacks_raw.append((order, f"`{order}.` {dname}(Th{dth}) <───── {oname}(Th{oth}) {stars_str} ({dest}%)"))
+
+        all_attacks_raw.sort(key=lambda x: x[0])
+        all_attacks = [x[1] for x in all_attacks_raw]
+
+        if not all_attacks:
+            lines.append("❌ No attacks recorded for this round yet.")
+        else:
+            lines.extend(all_attacks)
+        text = "\n".join(lines)
+    else:
+        text = (
+            f"🌟 **CWL — Round {round_idx + 1}/{total_rounds}** ({state_label})\n"
+            f"👥 {w_size}v{w_size}{time_str}{result_line}\n"
+            f"{'─' * 30}\n"
+            f"🛡️ **{c_name}**\n"
+            f"  ⭐ Stars: {c_stars}   💥 Dest: {c_dest:.1f}%\n\n"
+            f"🏴 **{o_name}**\n"
+            f"  ⭐ Stars: {o_stars}   💥 Dest: {o_dest:.1f}%\n"
+        )
+
+    if len(text) > 4096:
+        text = text[:4090] + "\n…"
+
+    await query.edit_message_text(
+        text, parse_mode='Markdown',
+        reply_markup=_cwl_round_markup(norm_tag, round_idx, total_rounds, view),
+        disable_web_page_preview=True
+    )
+
+
+
 

@@ -17,6 +17,10 @@ import logging
 import coc
 from telegram import Update
 from telegram.ext import ContextTypes
+from datetime import datetime, timezone
+
+from coc_api import get_clan_war
+from commands.clan import _parse_coc_time
 
 # ── Config ───────────────────────────────────────────────────────────────────
 DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "clan_data.json")
@@ -118,6 +122,13 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
         # First run: just save members and return
         if "members" not in data or not data["members"]:
             data["members"] = {t: {"name": m.name, "role": str(m.role)} for t, m in current_members.items()}
+            
+            war_data = await get_clan_war(clan_tag)
+            if "error" not in war_data and war_data.get("state") == "preparation":
+                data["last_war_opponent"] = war_data.get("opponent", {}).get("tag", "")
+            else:
+                data["last_war_opponent"] = ""
+                
             _save_data(data)
             print(f"First run for {clan_tag}: Saved {len(current_members)} members.", flush=True)
             return
@@ -177,6 +188,89 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=chat_id, text=text, parse_mode='Markdown', disable_web_page_preview=True)
                 safe_name = name.encode('ascii', 'ignore').decode()
                 print(f"Log: {safe_name} role changed from {old_role} to {new_role}.", flush=True)
+
+        # 4. Check for new War (Preparation)
+        war_data = await get_clan_war(clan_tag)
+        if "error" not in war_data:
+            state = war_data.get("state")
+            o_tag = war_data.get("opponent", {}).get("tag", "")
+            
+            if state == "preparation":
+                if data.get("last_war_opponent") != o_tag:
+                    data["last_war_opponent"] = o_tag
+                    changes_detected = True
+                    
+                    o_name = war_data.get("opponent", {}).get("name", "Unknown")
+                    team_size = war_data.get("teamSize", "?")
+                    o_clean = o_tag.replace("#", "")
+                    start_time_str = war_data.get("startTime", "")
+                    s_dt = _parse_coc_time(start_time_str)
+                    
+                    if s_dt:
+                        diff = s_dt - datetime.now(timezone.utc)
+                        hours, rem = divmod(int(diff.total_seconds()), 3600)
+                        if hours > 0:
+                            prep_str = f"{hours} hours"
+                        else:
+                            prep_str = f"{rem // 60} minutes"
+                    else:
+                        prep_str = "Unknown"
+                        
+                    war_text = (
+                        f"⚔️ **War Found!**\n"
+                        f"**{clan.name}** vs **[{o_name}](https://link.clashofclans.com/en?action=OpenClanProfile&tag=%23{o_clean})**\n"
+                        f"👥 Size: {team_size}v{team_size}\n"
+                        f"⏳ Preparation Time: {prep_str}"
+                    )
+                    await context.bot.send_message(chat_id=chat_id, text=war_text, parse_mode='Markdown', disable_web_page_preview=True)
+                    safe_o = o_name.encode('ascii', 'ignore').decode()
+                    print(f"Log: War found against {safe_o}", flush=True)
+            elif state == "warEnded":
+                if data.get("last_war_opponent", "") != "":
+                    clan_stars = war_data.get('clan', {}).get('stars', 0)
+                    clan_dest = war_data.get('clan', {}).get('destructionPercentage', 0)
+                    opp_stars = war_data.get('opponent', {}).get('stars', 0)
+                    opp_dest = war_data.get('opponent', {}).get('destructionPercentage', 0)
+                    
+                    if clan_stars > opp_stars:
+                        result_text = "🏆 **VICTORY!**"
+                    elif opp_stars > clan_stars:
+                        result_text = "💀 **DEFEAT**"
+                    else:
+                        if clan_dest > opp_dest:
+                            result_text = "🏆 **VICTORY (Destruction Tiebreak)!**"
+                        elif opp_dest > clan_dest:
+                            result_text = "💀 **DEFEAT (Destruction Tiebreak)**"
+                        else:
+                            result_text = "🤝 **DRAW**"
+                            
+                    e_dt = _parse_coc_time(war_data.get('endTime', ''))
+                    if e_dt:
+                        from datetime import timedelta
+                        ist_dt = e_dt + timedelta(hours=5, minutes=30)
+                        time_str = f"{ist_dt.strftime('%H:%M')} IST"
+                    else:
+                        time_str = "Unknown"
+                        
+                    o_name = war_data.get("opponent", {}).get("name", "Unknown")
+                    end_text = (
+                        f"🛑 **War Ended!** ({time_str})\n"
+                        f"**{clan.name}** vs **{o_name}**\n\n"
+                        f"{result_text}\n"
+                        f"🛡️ **{clan.name}**: {clan_stars} ⭐ ({clan_dest:.1f}%)\n"
+                        f"🏴 **{o_name}**: {opp_stars} ⭐ ({opp_dest:.1f}%)"
+                    )
+                    
+                    await context.bot.send_message(chat_id=chat_id, text=end_text, parse_mode='Markdown')
+                    print(f"Log: War ended against {o_name}", flush=True)
+                    
+                    data["last_war_opponent"] = ""
+                    changes_detected = True
+                    
+            elif state == "notInWar":
+                if data.get("last_war_opponent", "") != "":
+                    data["last_war_opponent"] = ""
+                    changes_detected = True
 
         # Update stored data if anything changed
         if prev_tags != curr_tags or changes_detected:

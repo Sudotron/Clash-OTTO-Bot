@@ -12,19 +12,20 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(base_dir, '.env')
 load_dotenv(dotenv_path)
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
+    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 )
 
 from database import init_db
 
 # Import our new command modules
-from commands.link import link_cmd
+from commands.link import link_cmd, owner_link_cmd
 from commands.player import (
     player_cmd, player_page_callback, troops_cmd, heroes_cmd, spells_cmd,
     todo_cmd, todo_page_callback, myid_cmd, myid_callback
 )
 from commands.clan import (
-    clan_cmd, clan_page_callback, clanwar_cmd, clansorted_cmd, clansorted_callback, clanwar_analytics_callback
+    clan_cmd, clan_page_callback, clanwar_cmd, clansorted_cmd, clansorted_callback, clanwar_analytics_callback,
+    cwl_cmd, cwl_callback
 )
 from commands.tracking import (
     track_cmd, deltrack_cmd, crnttrack_cmd, getid_cmd, setup_coc_client, check_clan_changes
@@ -49,11 +50,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /troops <code>[tag]</code> / /heroes / /spells\n"
         "• /clan <code>[tag]</code> — Clan Profile & Roster\n"
         "• /clansorted <code>[tag]</code> — Interactive Roster Sorting\n"
-        "• /clanwar <code>[tag]</code> — War Info & Analytics\n\n"
-        "🛡️ <b>Tracking (Owner only):</b>\n"
-        "• /track <code>#CLANTAG</code> — Start Join/Leave logs\n"
+        "• /clanwar <code>[tag]</code> — War Info & Analytics\n"
+        "• /cwl <code>[tag]</code> — CWL Group & War Details\n\n"
+        "👑 <b>Owner Commands:</b>\n"
+        "• /track <code>#CLANTAG</code> — Start Join/Leave/War logs\n"
         "• /deltrack — Stop tracking\n"
-        "• /crnttrack — Tracked Clan Details\n\n"
+        "• /crnttrack — Tracked Clan Details\n"
+        "• <code>>link #TAG</code> — Link CoC tag to user (Reply to msg)\n\n"
         "🆔 <b>Utilities:</b>\n"
         "• /getid — Get your Telegram ID\n\n"
         "👑 <b>Owner:</b> <a href='https://t.me/Llowx'>@Llowx</a>"
@@ -94,7 +97,11 @@ def main():
     app.add_handler(CommandHandler("clan", clan_cmd))
     app.add_handler(CommandHandler("clansorted", clansorted_cmd))
     app.add_handler(CommandHandler("clanwar", clanwar_cmd))
+    app.add_handler(CommandHandler("cwl", cwl_cmd))
     app.add_handler(CommandHandler("myid", myid_cmd))
+    
+    # Message handler for >link (owner only)
+    app.add_handler(MessageHandler(filters.Regex(r'^>link\s+'), owner_link_cmd))
 
     # Tracking commands
     app.add_handler(CommandHandler("track", track_cmd))
@@ -108,6 +115,7 @@ def main():
     app.add_handler(CallbackQueryHandler(clan_page_callback,   pattern=r"^(clan_p[12]|clan_members|clan_noop).*"))
     app.add_handler(CallbackQueryHandler(clansorted_callback,  pattern=r"^clansort:.*"))
     app.add_handler(CallbackQueryHandler(clanwar_analytics_callback, pattern=r"^cwar_a:.*"))
+    app.add_handler(CallbackQueryHandler(cwl_callback,         pattern=r"^cwl_r:.*"))
     app.add_handler(CallbackQueryHandler(myid_callback,        pattern=r"^myid:.*"))
 
     # Background job: check clan changes every 30 seconds
