@@ -35,6 +35,25 @@ E = {
     "fire":         "🔥",
     "cwl":          "🌟",
 }
+# ── Hero Max Levels by TH (since coc.py lacks hero level data) ───────────────
+HERO_MAX_LEVELS = {
+    "Barbarian King": {7: 5, 8: 10, 9: 30, 10: 40, 11: 50, 12: 65, 13: 75, 14: 80, 15: 90, 16: 95, 17: 105},
+    "Archer Queen":   {9: 30, 10: 40, 11: 50, 12: 65, 13: 75, 14: 80, 15: 90, 16: 95, 17: 105},
+    "Grand Warden":   {11: 20, 12: 40, 13: 50, 14: 55, 15: 65, 16: 70, 17: 80},
+    "Royal Champion": {13: 25, 14: 30, 15: 40, 16: 45, 17: 55},
+    "Minion Prince":  {17: 105}
+}
+
+def get_hero_max_level(hero_name: str, th: int) -> int:
+    """Return max hero level for a given Town Hall, or 0 if unknown."""
+    levels = HERO_MAX_LEVELS.get(hero_name)
+    if not levels:
+        return 0
+    max_lvl = 0
+    for req_th, lvl in levels.items():
+        if req_th <= th:
+            max_lvl = lvl
+    return max_lvl
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
