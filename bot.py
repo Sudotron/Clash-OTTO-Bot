@@ -34,6 +34,7 @@ from commands.tracking import (
 from commands.capital import cap_stats_cmd, cap_stats_callback
 from commands.audit import audit_cmd
 from commands.scraper import scrap_cmd, auto_scrap_job
+from commands.maintenance import maintenance_check_job, COMMAND_FROZEN_MSG
 
 
 logging.basicConfig(
@@ -95,6 +96,21 @@ def main():
 
     app = ApplicationBuilder().token(token).post_init(setup_coc_client).build()
 
+    # Global maintenance guard — catches ALL commands before they reach their handlers
+    async def global_maintenance_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if context.bot_data.get("maintenance_mode", False):
+            if update.message:
+                await update.message.reply_text(COMMAND_FROZEN_MSG, parse_mode="HTML")
+            elif update.callback_query:
+                await update.callback_query.answer(
+                    "🛑 Bot is frozen — Clash servers are under maintenance!", show_alert=True
+                )
+            return
+
+    # Priority -1 so it runs BEFORE all command handlers
+    app.add_handler(MessageHandler(filters.COMMAND, global_maintenance_handler), group=-1)
+    app.add_handler(CallbackQueryHandler(global_maintenance_handler), group=-1)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("player", player_cmd))
@@ -130,6 +146,9 @@ def main():
 
     # Background job: check clan changes every 30 seconds
     app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)
+
+    # Background job: check for CoC API maintenance every 2 minutes
+    app.job_queue.run_repeating(maintenance_check_job, interval=120, first=15)
     
     # Background job: auto-scrape max levels once a week (604800 seconds)
     app.job_queue.run_repeating(auto_scrap_job, interval=604800, first=60)

@@ -121,6 +121,15 @@ async def setup_coc_client(app):
     except Exception as e:
         logging.error(f"COC Login Error: {e}")
 
+    # Restore tracking chat_id from disk so maintenance notifier works after restart
+    try:
+        saved = _load_data()
+        if saved.get("chat_id"):
+            app.bot_data["tracking_chat_id"] = saved["chat_id"]
+            logging.info(f"Restored tracking chat_id: {saved['chat_id']}")
+    except Exception:
+        pass
+
 
 # ── Background Job ──────────────────────────────────────────────────────────
 
@@ -138,6 +147,9 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
     chat_id = data.get("chat_id") or CHAT_ID
     if not chat_id:
         return
+
+    # Cache chat_id in bot_data so maintenance notifier can use it
+    context.bot_data["tracking_chat_id"] = chat_id
 
     try:
         print(f"--- [Job] Starting Clan Scan for {clan_tag} ---", flush=True)
@@ -438,6 +450,9 @@ async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "notifications": DEFAULT_NOTIFICATIONS.copy()
         }
         _save_data(data)
+
+        # Cache chat_id in bot_data for the maintenance notifier
+        context.bot_data["tracking_chat_id"] = str(update.effective_chat.id)
 
         text = (
             f"✅ Now tracking *{clan.name}* (`{new_tag}`)\n\n"
