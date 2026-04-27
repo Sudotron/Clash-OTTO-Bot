@@ -20,7 +20,7 @@ from database import init_db
 # Import our new command modules
 from commands.link import link_cmd, owner_link_cmd
 from commands.player import (
-    player_cmd, player_page_callback, heroes_cmd, spells_cmd,
+    player_cmd, player_page_callback,
     todo_cmd, todo_page_callback, myid_cmd, myid_callback
 )
 from commands.clan import (
@@ -33,6 +33,7 @@ from commands.tracking import (
 )
 from commands.capital import cap_stats_cmd, cap_stats_callback
 from commands.audit import audit_cmd
+from commands.scraper import scrap_cmd, auto_scrap_job
 
 
 logging.basicConfig(
@@ -46,11 +47,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Welcome to Clash OTTO Bot</b> ⚔️\n\n"
         "<b>A high-performance bot for Clash Of Clans tracking and analytics.</b>\n\n"
         "📊 <b>Commands:</b>\n"
-        "• /link <code>#TAG</code> — Link your CoC Account\n"
+        "• /link <code>[tag]</code> — Link your CoC Account\n"
         "• /myid — Profile & Linked Accounts\n"
         "• /player <code>[tag]</code> — Full player stats\n"
         "• /todo <code>[tag]</code> — Upgrade Progress (TH-specific)\n"
-        "• /heroes <code>[tag]</code> / /spells <code>[tag]</code>\n"
         "• /clan <code>[tag]</code> — Clan Profile & Roster\n"
         "• /clansorted <code>[tag]</code> — Interactive Roster Sorting\n"
         "• /clanwar <code>[tag]</code> — War Info & Analytics\n"
@@ -58,9 +58,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /audit <code>#TAG</code> — Player Rush Audit\n"
         "• /cap_stats <code>[tag]</code> — Capital Gold Rankings\n\n"
         "👑 <b>Admin Commands:</b>\n"
-        "• /track <code>#CLANTAG</code> — Start Join/Leave/War logs\n"
+        "• /clantrack <code>#CLANTAG</code> — Start Join/Leave/War logs\n"
         "• /deltrack — Stop tracking\n"
         "• /crnttrack — Tracked Clan Details\n"
+        "• /scrap — Scrape latest TH max levels\n"
         "• <code>>link #TAG</code> — Link CoC tag to user (Reply to msg)\n\n"
         "🔔 <b>Automated:</b>\n"
         "• War Feed — Real-time attack notifications\n\n"
@@ -98,8 +99,6 @@ def main():
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("player", player_cmd))
     app.add_handler(CommandHandler("todo", todo_cmd))
-    app.add_handler(CommandHandler("heroes", heroes_cmd))
-    app.add_handler(CommandHandler("spells", spells_cmd))
     app.add_handler(CommandHandler("clan", clan_cmd))
     app.add_handler(CommandHandler("clansorted", clansorted_cmd))
     app.add_handler(CommandHandler("clanwar", clanwar_cmd))
@@ -112,10 +111,11 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^>link\s+'), owner_link_cmd))
 
     # Tracking commands
-    app.add_handler(CommandHandler("track", track_cmd))
+    app.add_handler(CommandHandler("clantrack", track_cmd))
     app.add_handler(CommandHandler("deltrack", deltrack_cmd))
     app.add_handler(CommandHandler("crnttrack", crnttrack_cmd))
     app.add_handler(CommandHandler("getid", getid_cmd))
+    app.add_handler(CommandHandler("scrap", scrap_cmd))
 
     # Inline page navigation
     app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^(player_p[123]|player_history):"))
@@ -130,6 +130,9 @@ def main():
 
     # Background job: check clan changes every 30 seconds
     app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)
+    
+    # Background job: auto-scrape max levels once a week (604800 seconds)
+    app.job_queue.run_repeating(auto_scrap_job, interval=604800, first=60)
 
     logging.info("Starting bot...")
     app.run_polling()

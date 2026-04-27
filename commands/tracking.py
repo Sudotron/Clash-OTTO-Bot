@@ -2,7 +2,7 @@
 Clan Tracking Commands — ported from Req and Leave bot.
 
 Commands:
-  /track <clan_tag>    — Start tracking a clan for join/leave/promotion events
+  /clantrack <clan_tag> — Start tracking a clan for join/leave/promotion events
   /deltrack            — Stop tracking the current clan
   /crnttrack           — Show currently tracked clan details
 
@@ -408,14 +408,14 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start tracking a clan: /track <clan_tag>"""
+    """Start tracking a clan: /clantrack <clan_tag>"""
     user_id = update.effective_user.id
     if OWNER_ID != 0 and user_id != OWNER_ID:
         await update.message.reply_text("❌ This command is available for the owner only.")
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /track <clan_tag>")
+        await update.message.reply_text("Usage: /clantrack <clan_tag>")
         return
 
     coc_client = context.bot_data.get("coc_client")

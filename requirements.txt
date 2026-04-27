@@ -4,3 +4,4 @@ aiosqlite==0.19.0
 Pillow>=10.0
 coc.py==4.0.0
 httpx
+beautifulsoup4

@@ -6,7 +6,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from coc_api import get_player, get_player_stats, get_player_warhits, get_clan, get_player_join_leave
-from commands.utils import E, _resolve_tag, _build_player_page1, _build_player_page2, _build_player_page3, get_hero_max_level
+from commands.utils import E, _resolve_tag, _build_player_page1, _build_player_page2, _build_player_page3, get_scraped_th_max
 from database import get_all_linked_tags
 
 # ── Path to processed TownHall images (grey bg, compressed) ─────────────────
@@ -207,63 +207,17 @@ async def troops_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 
-async def heroes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tag = await _resolve_tag(update, context)
-    if not tag:
-        await update.message.reply_text("Please provide a tag or link an account first.")
-        return
-
-    data = await get_player(tag)
-    if "error" in data:
-        await update.message.reply_text(f"❌ {data['error']}")
-        return
-
-    heroes = data.get('heroes', [])
-    equipment = data.get('heroEquipment', [])
-
-    text = f"{E['hero']} **{data.get('name')} — Heroes:**\n"
-    for h in heroes:
-        if h.get('village') == 'home':
-            lvl, ml = h.get('level'), h.get('maxLevel')
-            maxed = " ✅" if lvl == ml else ""
-            text += f"• {h.get('name')}: Lvl {lvl}/{ml}{maxed}\n"
-
-    if equipment:
-        text += "\n🔮 **Hero Equipment:**\n"
-        for e in equipment:
-            lvl, ml = e.get('level'), e.get('maxLevel')
-            maxed = " ✅" if lvl == ml else ""
-            text += f"• {e.get('name')}: Lvl {lvl}/{ml}{maxed}\n"
-
-    if text == f"{E['hero']} **{data.get('name')} — Heroes:**\n":
-        text = "No heroes found."
-
-    await update.message.reply_text(text, parse_mode='Markdown')
 
 
-async def spells_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tag = await _resolve_tag(update, context)
-    if not tag:
-        await update.message.reply_text("Please provide a tag or link an account first.")
-        return
-
-    data = await get_player(tag)
-    if "error" in data:
-        await update.message.reply_text(f"❌ {data['error']}")
-        return
-
-    spells = [s for s in data.get('spells', []) if s.get('village') == 'home']
-    if not spells:
-        await update.message.reply_text("No spells found.")
-        return
-
-    text = f"{E['spell']} **{data.get('name')} — Spells:**\n"
-    for s in spells:
-        lvl, ml = s.get('level'), s.get('maxLevel')
-        maxed = " ✅" if lvl == ml else ""
-        text += f"• {s.get('name')}: Lvl {lvl}/{ml}{maxed}\n"
-    await update.message.reply_text(text, parse_mode='Markdown')
-
+# Lists of units to categorize correctly
+PET_LIST = [
+    "L.A.S.S.I", "Electro Owl", "Mighty Yak", "Unicorn", "Frosty", "Diggy", 
+    "Poison Lizard", "Phoenix", "Spirit Fox", "Angry Jelly", "Sneezy", "Greedy Raven"
+]
+SIEGE_LIST = [
+    "Wall Wrecker", "Battle Blimp", "Stone Slammer", "Siege Barracks", 
+    "Log Launcher", "Flame Flinger", "Battle Drill", "Troop Launcher", "Sky Wagon"
+]
 
 def _build_todo_page(data: dict, category: str, tag: str, th_max: dict = None) -> tuple:
     name = data.get('name', 'Unknown')
@@ -274,28 +228,40 @@ def _build_todo_page(data: dict, category: str, tag: str, th_max: dict = None) -
     to_upgrade_heroes = []
     to_upgrade_troops = []
     to_upgrade_spells = []
+    to_upgrade_siege = []
+    to_upgrade_pets = []
 
     for h in data.get('heroes', []):
         if h.get('village') == 'home':
             hname = h.get('name', '')
             lvl = h.get('level', 0)
-            ml = th_max.get(hname, h.get('maxLevel', lvl))
+            th_int = th if isinstance(th, int) else 0
+            ml = get_scraped_th_max(hname, th_int) or th_max.get(hname) or h.get('maxLevel', lvl)
             if lvl < ml:
                 to_upgrade_heroes.append({'name': hname, 'level': lvl, 'maxLevel': ml})
             
     for t in data.get('troops', []):
-        if t.get('village') == 'home' and 'Super' not in t.get('name', '') and not t.get('name', '').startswith('Super'):
+        if t.get('village') == 'home':
             tname = t.get('name', '')
             lvl = t.get('level', 0)
-            ml = th_max.get(tname, t.get('maxLevel', lvl))
+            th_int = th if isinstance(th, int) else 0
+            ml = get_scraped_th_max(tname, th_int) or th_max.get(tname) or t.get('maxLevel', lvl)
+            
             if lvl < ml:
-                to_upgrade_troops.append({'name': tname, 'level': lvl, 'maxLevel': ml})
+                item = {'name': tname, 'level': lvl, 'maxLevel': ml}
+                if tname in SIEGE_LIST:
+                    to_upgrade_siege.append(item)
+                elif tname in PET_LIST:
+                    to_upgrade_pets.append(item)
+                else:
+                    to_upgrade_troops.append(item)
             
     for s in data.get('spells', []):
         if s.get('village') == 'home':
             sname = s.get('name', '')
             lvl = s.get('level', 0)
-            ml = th_max.get(sname, s.get('maxLevel', lvl))
+            th_int = th if isinstance(th, int) else 0
+            ml = get_scraped_th_max(sname, th_int) or th_max.get(sname) or s.get('maxLevel', lvl)
             if lvl < ml:
                 to_upgrade_spells.append({'name': sname, 'level': lvl, 'maxLevel': ml})
 
@@ -309,6 +275,14 @@ def _build_todo_page(data: dict, category: str, tag: str, th_max: dict = None) -
         emoji = E.get('troop', '🪖')
         items = to_upgrade_troops
         title = "Troops"
+    elif category == "siege":
+        emoji = E.get('siege', '🚜')
+        items = to_upgrade_siege
+        title = "Siege Machines"
+    elif category == "pets":
+        emoji = E.get('pet', '🐾')
+        items = to_upgrade_pets
+        title = "Hero Pets"
     else:
         category = "spells"
         emoji = E.get('spell', '🧪')
@@ -326,7 +300,11 @@ def _build_todo_page(data: dict, category: str, tag: str, th_max: dict = None) -
         [
             InlineKeyboardButton(f"{'✅ ' if category=='heroes' else ''}👑 Heroes", callback_data=f"todo_p:heroes:{tag}"),
             InlineKeyboardButton(f"{'✅ ' if category=='troops' else ''}🪖 Troops", callback_data=f"todo_p:troops:{tag}"),
-            InlineKeyboardButton(f"{'✅ ' if category=='spells' else ''}🧪 Spells", callback_data=f"todo_p:spells:{tag}")
+            InlineKeyboardButton(f"{'✅ ' if category=='spells' else ''}🧪 Spells", callback_data=f"todo_p:spells:{tag}"),
+        ],
+        [
+            InlineKeyboardButton(f"{'✅ ' if category=='siege' else ''}🚜 Siege", callback_data=f"todo_p:siege:{tag}"),
+            InlineKeyboardButton(f"{'✅ ' if category=='pets' else ''}🐾 Pets", callback_data=f"todo_p:pets:{tag}"),
         ]
     ]
 
@@ -346,7 +324,7 @@ async def _get_th_max(context, tag: str, th_level) -> dict:
         player = await coc_client.get_player(clean_tag)
         for h in player.heroes:
             if h.is_home_base:
-                ml = get_hero_max_level(h.name, th_level)
+                ml = get_scraped_th_max(h.name, th_level)
                 if ml:
                     th_max[h.name] = ml
         for t in player.troops:

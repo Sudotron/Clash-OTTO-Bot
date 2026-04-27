@@ -19,7 +19,8 @@ E = {
     "troop":        "🪖",
     "hero":         "👑",
     "spell":        "🧪",
-    "siege":        "🏰",
+    "siege":        "🚜",
+    "pet":          "🐾",
     "super":        "✨",
     "warning":      "⚠️",
     "player":       "👤",
@@ -35,24 +36,37 @@ E = {
     "fire":         "🔥",
     "cwl":          "🌟",
 }
-# ── Hero Max Levels by TH (since coc.py lacks hero level data) ───────────────
-HERO_MAX_LEVELS = {
-    "Barbarian King": {7: 5, 8: 10, 9: 30, 10: 40, 11: 50, 12: 65, 13: 75, 14: 80, 15: 90, 16: 95, 17: 105},
-    "Archer Queen":   {9: 30, 10: 40, 11: 50, 12: 65, 13: 75, 14: 80, 15: 90, 16: 95, 17: 105},
-    "Grand Warden":   {11: 20, 12: 40, 13: 50, 14: 55, 15: 65, 16: 70, 17: 80},
-    "Royal Champion": {13: 25, 14: 30, 15: 40, 16: 45, 17: 55},
-    "Minion Prince":  {17: 105}
-}
+import json
+import os
 
-def get_hero_max_level(hero_name: str, th: int) -> int:
-    """Return max hero level for a given Town Hall, or 0 if unknown."""
-    levels = HERO_MAX_LEVELS.get(hero_name)
-    if not levels:
+def get_scraped_th_max(unit_name: str, th: int) -> int:
+    """Return max level for a given unit and Town Hall from scraped JSON."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_file = os.path.join(base_dir, "th_max_levels.json")
+    
+    if not os.path.exists(data_file):
         return 0
+        
+    try:
+        with open(data_file, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return 0
+        
+    unit_data = data.get(unit_name)
+    if not unit_data:
+        return 0
+        
     max_lvl = 0
-    for req_th, lvl in levels.items():
-        if req_th <= th:
-            max_lvl = lvl
+    # The JSON keys are string TH levels (e.g. "7", "8", "16")
+    for req_th_str, lvl in unit_data.items():
+        try:
+            req_th = int(req_th_str)
+            if req_th <= th:
+                max_lvl = lvl
+        except ValueError:
+            continue
+            
     return max_lvl
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -252,6 +266,7 @@ def _build_player_page3(data: dict) -> str:
     """Build page 3: Heroes, Hero Equipment & Builder Base Heroes."""
     name = data.get('name', 'Unknown')
     th = data.get('townHallLevel', '?')
+    th_int = th if isinstance(th, int) else 0
 
     heroes_all = data.get('heroes', [])
     equipment = data.get('heroEquipment', [])
@@ -266,9 +281,11 @@ def _build_player_page3(data: dict) -> str:
     if home_heroes:
         for h in home_heroes:
             lvl = h.get('level', '?')
-            ml = h.get('maxLevel', '?')
+            hname = h.get('name', '')
+            th_ml = get_scraped_th_max(hname, th_int) if th_int else 0
+            ml = th_ml if th_ml else h.get('maxLevel', '?')
             maxed = "✅" if lvl == ml else ""
-            text += f"  • {h.get('name')}: {lvl}/{ml} {maxed}\n"
+            text += f"  • {hname}: {lvl}/{ml} {maxed}\n"
     else:
         text += "  None\n"
 

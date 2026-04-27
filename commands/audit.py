@@ -12,7 +12,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from coc_api import get_player
-from commands.utils import E, _resolve_tag, fmt_number, get_hero_max_level
+from commands.utils import E, _resolve_tag, fmt_number, get_scraped_th_max
 
 
 async def _get_th_max_audit(context, tag: str, th_level: int) -> dict:
@@ -28,7 +28,7 @@ async def _get_th_max_audit(context, tag: str, th_level: int) -> dict:
         player = await coc_client.get_player(clean_tag)
         for h in player.heroes:
             if h.is_home_base:
-                ml = get_hero_max_level(h.name, th_level)
+                ml = get_scraped_th_max(h.name, th_level)
                 if ml:
                     th_max[h.name] = ml
         for t in player.troops:
@@ -82,7 +82,7 @@ async def audit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for h in heroes:
         hname = h.get("name", "Unknown")
         lvl = h.get("level", 0)
-        max_lvl = th_max.get(hname, h.get("maxLevel", 1))
+        max_lvl = get_scraped_th_max(hname, th) or th_max.get(hname) or h.get("maxLevel", 1)
         pct = round(lvl / max_lvl * 100) if max_lvl > 0 else 100
 
         if pct >= 90:
@@ -104,39 +104,41 @@ async def audit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         and not t.get("name", "").startswith("Super")
     ]
     total_troops = len(home_troops)
-    maxed_troops = sum(
-        1 for t in home_troops
-        if t.get("level", 0) >= th_max.get(t.get("name", ""), t.get("maxLevel", 1))
-    )
-    troop_pct = round(maxed_troops / total_troops * 100) if total_troops > 0 else 100
+    troop_sum = 0
+    maxed_troops = 0
+    for t in home_troops:
+        t_ml = get_scraped_th_max(t.get("name", ""), th) or th_max.get(t.get("name", "")) or t.get("maxLevel", 1)
+        troop_sum += (t.get("level", 0) / t_ml * 100) if t_ml > 0 else 100
+        if t.get("level", 0) >= t_ml:
+            maxed_troops += 1
+    
+    troop_pct = round(troop_sum / total_troops) if total_troops > 0 else 100
     troop_status = "✅" if troop_pct >= 80 else "⚠️" if troop_pct >= 60 else "❌"
 
     # ── Spells Analysis ──────────────────────────────────────────────────
     home_spells = [s for s in data.get("spells", []) if s.get("village") == "home"]
     total_spells = len(home_spells)
-    maxed_spells = sum(
-        1 for s in home_spells
-        if s.get("level", 0) >= th_max.get(s.get("name", ""), s.get("maxLevel", 1))
-    )
-    spell_pct = round(maxed_spells / total_spells * 100) if total_spells > 0 else 100
+    spell_sum = 0
+    maxed_spells = 0
+    for s in home_spells:
+        s_ml = get_scraped_th_max(s.get("name", ""), th) or th_max.get(s.get("name", "")) or s.get("maxLevel", 1)
+        spell_sum += (s.get("level", 0) / s_ml * 100) if s_ml > 0 else 100
+        if s.get("level", 0) >= s_ml:
+            maxed_spells += 1
+            
+    spell_pct = round(spell_sum / total_spells) if total_spells > 0 else 100
     spell_status = "✅" if spell_pct >= 80 else "⚠️" if spell_pct >= 60 else "❌"
 
-    # ── Hero Equipment Analysis ──────────────────────────────────────────
-    equipment = data.get("heroEquipment", [])
-    equip_text = ""
-    if equipment:
-        total_equip = len(equipment)
-        maxed_equip = sum(1 for e in equipment if e.get("level", 0) >= e.get("maxLevel", 1))
-        equip_pct = round(maxed_equip / total_equip * 100) if total_equip > 0 else 100
-        equip_status = "✅" if equip_pct >= 70 else "⚠️" if equip_pct >= 40 else "❌"
-        equip_text = f"\n🔮 Equipment: {maxed_equip}/{total_equip} maxed ({equip_pct}%) {equip_status}"
 
     # ── Overall Verdict ──────────────────────────────────────────────────
     hero_avg_pct = 0
     if heroes:
+        def _hero_ml(h):
+            hname = h.get("name", "")
+            return get_scraped_th_max(hname, th) or th_max.get(hname) or h.get("maxLevel", 1)
         hero_avg_pct = round(sum(
-            h.get("level", 0) / th_max.get(h.get("name", ""), h.get("maxLevel", 1)) * 100
-            for h in heroes if th_max.get(h.get("name", ""), h.get("maxLevel", 0)) > 0
+            h.get("level", 0) / _hero_ml(h) * 100
+            for h in heroes if _hero_ml(h) > 0
         ) / len(heroes))
 
     overall_score = (hero_avg_pct * 0.5) + (troop_pct * 0.3) + (spell_pct * 0.2)
@@ -172,7 +174,6 @@ async def audit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"\n{E['troop']} Troops: {maxed_troops}/{total_troops} maxed ({troop_pct}%) {troop_status}"
         f"\n{E['spell']} Spells: {maxed_spells}/{total_spells} maxed ({spell_pct}%) {spell_status}"
     )
-    text += equip_text
 
     text += (
         f"\n\n{'─' * 30}\n"
