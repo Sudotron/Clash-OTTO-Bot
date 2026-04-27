@@ -77,6 +77,11 @@ async def get_cwl_war(war_tag: str):
     """Fetch individual CWL round war data by war tag."""
     return await fetch_coc_data(f"/clanwarleagues/wars/{format_tag(war_tag)}")
 
+async def get_clan_capital_raid_seasons(tag: str, limit: int = 1) -> dict:
+    """Fetch capital raid season data for a clan (includes per-member looted gold)."""
+    return await fetch_coc_data(f"/clans/{format_tag(tag)}/capitalraidseasons?limit={limit}")
+
+
 async def search_clans(min_clan_level: int = 10, min_clan_points: int = 35000, limit: int = 50) -> dict:
     """Search clans with high level/points — used for /raidclans capital hall filtering."""
     return await fetch_coc_data(

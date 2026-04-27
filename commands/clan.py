@@ -9,6 +9,7 @@ from coc_api import (
     get_clan, get_player, get_clan_war, get_previous_wars,
     get_cwl_group, get_cwl_war, search_clans
 )
+from collections import Counter
 from commands.utils import E, _resolve_tag, _build_clan_page1, _build_members_page
 
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
@@ -94,6 +95,16 @@ async def clan_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _th_roster(members: list) -> str:
+    """Build TH breakdown from war members list, e.g. 'TH16×5 | TH15×8'."""
+    if not members:
+        return ""
+    th_counts = Counter(m.get('townhallLevel', 0) for m in members)
+    parts = [f"TH{th}×{count}" for th, count in sorted(th_counts.items(), reverse=True) if th > 0]
+    return "  " + " | ".join(parts) if parts else ""
+
+
 
 def _parse_coc_time(ts: str) -> datetime | None:
     """Parse CoC API timestamp '20250501T120000.000Z' -> UTC datetime."""
@@ -260,6 +271,12 @@ async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         result_line = ""
 
+    # ── TH Roster ──
+    clan_members_list = war_data.get('clan', {}).get('members', [])
+    opp_members_list = war_data.get('opponent', {}).get('members', [])
+    clan_roster = _th_roster(clan_members_list)
+    opp_roster = _th_roster(opp_members_list)
+
     text = (
         f"⚔️ **Clan War — {state_label}**\n"
         f"👥 Size: {team_size}v{team_size}"
@@ -267,9 +284,11 @@ async def clanwar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{result_line}\n"
         f"{'─' * 30}\n"
         f"🛡️ **{clan_name}**\n"
-        f"  ⭐ Stars: {clan_stars}   💥 Dest: {clan_dest:.1f}%\n\n"
+        f"  ⭐ Stars: {clan_stars}   💥 Dest: {clan_dest:.1f}%\n"
+        f"{clan_roster}\n\n"
         f"🏴 **{opp_name}**\n"
         f"  ⭐ Stars: {opp_stars}   💥 Dest: {opp_dest:.1f}%\n"
+        f"{opp_roster}\n"
     )
     
     keyboard = [[
@@ -342,14 +361,18 @@ async def clanwar_analytics_callback(update: Update, context: ContextTypes.DEFAU
         opp_stars = war_data.get('opponent', {}).get('stars', 0)
         opp_dest = war_data.get('opponent', {}).get('destructionPercentage', 0)
         team_size = war_data.get('teamSize', '?')
+        c_roster = _th_roster(war_data.get('clan', {}).get('members', []))
+        o_roster = _th_roster(war_data.get('opponent', {}).get('members', []))
 
         text = (
             f"⚔️ **Clan War — {state.capitalize() if state else 'Unknown'}**\n"
             f"👥 Size: {team_size}v{team_size}\n\n"
             f"🛡️ **{clan_name}**\n"
-            f"  ⭐ Stars: {clan_stars}   💥 Dest: {clan_dest:.1f}%\n\n"
+            f"  ⭐ Stars: {clan_stars}   💥 Dest: {clan_dest:.1f}%\n"
+            f"{c_roster}\n\n"
             f"🏴 **{opp_name}**\n"
             f"  ⭐ Stars: {opp_stars}   💥 Dest: {opp_dest:.1f}%\n"
+            f"{o_roster}\n"
         )
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=_cwar_analytics_markup(view, norm_tag, war_index, 0, 1), disable_web_page_preview=True)
         return

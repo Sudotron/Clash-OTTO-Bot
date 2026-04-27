@@ -19,7 +19,8 @@ E = {
     "troop":        "🪖",
     "hero":         "👑",
     "spell":        "🧪",
-    "siege":        "🏰",
+    "siege":        "🚜",
+    "pet":          "🐾",
     "super":        "✨",
     "warning":      "⚠️",
     "player":       "👤",
@@ -35,6 +36,38 @@ E = {
     "fire":         "🔥",
     "cwl":          "🌟",
 }
+import json
+import os
+
+def get_scraped_th_max(unit_name: str, th: int) -> int:
+    """Return max level for a given unit and Town Hall from scraped JSON."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_file = os.path.join(base_dir, "th_max_levels.json")
+    
+    if not os.path.exists(data_file):
+        return 0
+        
+    try:
+        with open(data_file, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return 0
+        
+    unit_data = data.get(unit_name)
+    if not unit_data:
+        return 0
+        
+    max_lvl = 0
+    # The JSON keys are string TH levels (e.g. "7", "8", "16")
+    for req_th_str, lvl in unit_data.items():
+        try:
+            req_th = int(req_th_str)
+            if req_th <= th:
+                max_lvl = lvl
+        except ValueError:
+            continue
+            
+    return max_lvl
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -233,6 +266,7 @@ def _build_player_page3(data: dict) -> str:
     """Build page 3: Heroes, Hero Equipment & Builder Base Heroes."""
     name = data.get('name', 'Unknown')
     th = data.get('townHallLevel', '?')
+    th_int = th if isinstance(th, int) else 0
 
     heroes_all = data.get('heroes', [])
     equipment = data.get('heroEquipment', [])
@@ -247,9 +281,11 @@ def _build_player_page3(data: dict) -> str:
     if home_heroes:
         for h in home_heroes:
             lvl = h.get('level', '?')
-            ml = h.get('maxLevel', '?')
+            hname = h.get('name', '')
+            th_ml = get_scraped_th_max(hname, th_int) if th_int else 0
+            ml = th_ml if th_ml else h.get('maxLevel', '?')
             maxed = "✅" if lvl == ml else ""
-            text += f"  • {h.get('name')}: {lvl}/{ml} {maxed}\n"
+            text += f"  • {hname}: {lvl}/{ml} {maxed}\n"
     else:
         text += "  None\n"
 
