@@ -12,7 +12,8 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 dotenv_path = os.path.join(base_dir, '.env')
 load_dotenv(dotenv_path)
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+    ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ApplicationHandlerStop
 )
 
 from database import init_db
@@ -105,9 +106,10 @@ def main():
                 await update.callback_query.answer(
                     "🛑 Bot is frozen — Clash servers are under maintenance!", show_alert=True
                 )
-            return
+            # CRITICAL: Stop the update from reaching any other handler group
+            raise ApplicationHandlerStop
 
-    # Priority -1 so it runs BEFORE all command handlers
+    # group=-1 runs BEFORE all command handlers in group 0
     app.add_handler(MessageHandler(filters.COMMAND, global_maintenance_handler), group=-1)
     app.add_handler(CallbackQueryHandler(global_maintenance_handler), group=-1)
 
@@ -148,7 +150,7 @@ def main():
     app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)
 
     # Background job: check for CoC API maintenance every 2 minutes
-    app.job_queue.run_repeating(maintenance_check_job, interval=120, first=15)
+    app.job_queue.run_repeating(maintenance_check_job, interval=120, first=5)
     
     # Background job: auto-scrape max levels once a week (604800 seconds)
     app.job_queue.run_repeating(auto_scrap_job, interval=604800, first=60)
