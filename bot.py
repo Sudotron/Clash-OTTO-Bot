@@ -36,6 +36,7 @@ from commands.capital import cap_stats_cmd, cap_stats_callback
 from commands.audit import audit_cmd
 from commands.scraper import scrap_cmd, auto_scrap_job
 from commands.maintenance import maintenance_check_job, COMMAND_FROZEN_MSG
+from commands.forecaster import loot_notification_job, loot_cmd, loot_toggle_callback
 
 
 logging.basicConfig(
@@ -57,14 +58,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /clansorted <code>[tag]</code> — Interactive Roster Sorting\n"
         "• /clanwar <code>[tag]</code> — War Info & Analytics\n"
         "• /cwl <code>[tag]</code> — CWL Group & War Details\n"
-        "• /audit <code>#TAG</code> — Player Rush Audit\n"
+        "• /audit <code>[tag]</code> — Player Rush Audit\n"
         "• /cap_stats <code>[tag]</code> — Capital Gold Rankings\n\n"
         "👑 <b>Admin Commands:</b>\n"
         "• /clantrack <code>#CLANTAG</code> — Start Join/Leave/War logs\n"
         "• /deltrack — Stop tracking\n"
         "• /crnttrack — Tracked Clan Details\n"
         "• /scrap — Scrape latest TH max levels\n"
-        "• <code>>link #TAG</code> — Link CoC tag to user (Reply to msg)\n\n"
+        "• <code>>link [tag]</code> — Link CoC tag to user (Reply to msg)\n\n"
         "🔔 <b>Automated:</b>\n"
         "• War Feed — Real-time attack notifications\n\n"
         "🆔 <b>Utilities:</b>\n"
@@ -124,6 +125,7 @@ def main():
     app.add_handler(CommandHandler("myid", myid_cmd))
     app.add_handler(CommandHandler("cap_stats", cap_stats_cmd))
     app.add_handler(CommandHandler("audit", audit_cmd))
+    app.add_handler(CommandHandler("loot", loot_cmd))
     
     # Message handler for >link (owner only)
     app.add_handler(MessageHandler(filters.Regex(r'^>link\s+'), owner_link_cmd))
@@ -145,6 +147,7 @@ def main():
     app.add_handler(CallbackQueryHandler(myid_callback,        pattern=r"^myid:.*"))
     app.add_handler(CallbackQueryHandler(track_config_callback, pattern=r"^tkcfg:.*"))
     app.add_handler(CallbackQueryHandler(cap_stats_callback, pattern=r"^capst:.*"))
+    app.add_handler(CallbackQueryHandler(loot_toggle_callback, pattern=r"^loot_toggle$"))
 
     # Background job: check clan changes every 30 seconds
     app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)
@@ -154,6 +157,9 @@ def main():
     
     # Background job: auto-scrape max levels once a week (604800 seconds)
     app.job_queue.run_repeating(auto_scrap_job, interval=604800, first=60)
+
+    # Background job: Loot Forecaster notification every 4 hours (14400 seconds)
+    app.job_queue.run_repeating(loot_notification_job, interval=14400, first=120)
 
     logging.info("Starting bot...")
     app.run_polling()
