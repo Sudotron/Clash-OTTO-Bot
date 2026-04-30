@@ -43,12 +43,15 @@ def get_current_loot_info():
     max_loot_minute = float(data.get("maxLootMinute", 45494096))
     
     current_epoch = time.time()
-    offset = (current_epoch - BASE_EPOCH) % WEEK_SECONDS
-    index = int(offset // 60)
+    offset = current_epoch - BASE_EPOCH
+    index = int(offset // 60) % len(loot_minutes)
     
     # Current
     current_loot = loot_minutes[index]
     current_index = round((current_loot / max_loot_minute) * 10, 1)
+    
+    players_online = data["totals"]["playersOnline"][index]
+    shielded_players = data["totals"]["shieldedPlayers"][index]
     
     # Next hour
     next_hour_index = (index + 60) % len(loot_minutes)
@@ -71,6 +74,8 @@ def get_current_loot_info():
     return {
         "index": current_index,
         "status": get_status(current_index),
+        "players_online": players_online,
+        "shielded_players": shielded_players,
         "next_hour_index": next_hour_idx,
         "next_hour_status": get_status(next_hour_idx),
         "trend": "📈 Increasing" if next_hour_idx > current_index else "📉 Decreasing" if next_hour_idx < current_index else "➡️ Stable",
@@ -113,7 +118,8 @@ async def loot_notification_job(context: ContextTypes.DEFAULT_TYPE):
         f"Current Loot Index: **{info['index']}/10.0** ({info['status']})\n"
         f"Forecast (1h): **{info['next_hour_index']}/10.0** ({info['trend']})\n"
         f"Forecast (2h): **{info['next_2hour_index']}/10.0** ({info['trend_2h']})\n\n"
-        f"_The best time to raid is when the index is above 8.0!_"
+        f"_The best time to raid is when the index is above 8.0!_\n\n"
+        f"⚠️ _Disclaimer: This data is not affiliated with Clash of Clans servers. It is calculated by a predictive algorithm and is not 100% reliable._"
     )
     
     try:
@@ -121,6 +127,15 @@ async def loot_notification_job(context: ContextTypes.DEFAULT_TYPE):
         print(f"Sent Loot Forecaster notification to {chat_id}")
     except Exception as e:
         print(f"Failed to send loot notification: {e}")
+
+def _get_loot_keyboard():
+    return [
+        [
+            InlineKeyboardButton("🌍 Worldwide Stats", callback_data="loot_worldwide"),
+            InlineKeyboardButton("🗺️ Most Active Region", callback_data="loot_region")
+        ],
+        [InlineKeyboardButton("Toggle Notifications", callback_data="loot_toggle")]
+    ]
 
 async def loot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = get_current_loot_info()
@@ -136,15 +151,15 @@ async def loot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Current Loot Index: **{info['index']}/10.0** ({info['status']})\n"
         f"Forecast (1h): **{info['next_hour_index']}/10.0** ({info['trend']})\n"
         f"Forecast (2h): **{info['next_2hour_index']}/10.0** ({info['trend_2h']})\n\n"
-        f"Group Notifications: {status_emoji}"
+        f"Group Notifications: {status_emoji}\n\n"
+        f"⚠️ _Disclaimer: This data is not affiliated with Clash of Clans servers. It is calculated by a predictive algorithm and is not 100% reliable._"
     )
     
-    keyboard = [
-        [InlineKeyboardButton("Toggle Notifications", callback_data="loot_toggle")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    reply_markup = InlineKeyboardMarkup(_get_loot_keyboard())
+    if update.message:
+        await update.message.reply_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def loot_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -154,23 +169,50 @@ async def loot_toggle_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     new_status = not config.get("enabled", True)
     set_loot_config(new_status)
     
+    # Just render the main menu again
+    await loot_cmd(update, context)
+
+async def loot_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await loot_cmd(update, context)
+
+async def loot_worldwide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     info = get_current_loot_info()
-    if not info:
-        return
-        
-    status_emoji = "✅ ON" if new_status else "❌ OFF"
     
     text = (
-        f"📊 **Loot Forecaster**\n\n"
-        f"Current Loot Index: **{info['index']}/10.0** ({info['status']})\n"
-        f"Forecast (1h): **{info['next_hour_index']}/10.0** ({info['trend']})\n"
-        f"Forecast (2h): **{info['next_2hour_index']}/10.0** ({info['trend_2h']})\n\n"
-        f"Group Notifications: {status_emoji}"
+        f"🌍 **Worldwide Clash Stats**\n\n"
+        f"👤 Players Online: **{info['players_online']:,}**\n"
+        f"🛡️ Shielded Players: **{info['shielded_players']:,}**\n\n"
+        f"_Data based on cyclical forecaster model_"
     )
+    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="loot_back")]]
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+
+def get_most_active_region():
+    utc_hour = datetime.now(timezone.utc).hour
+    if 1 <= utc_hour < 7:
+        return "North America 🇺🇸🇨🇦"
+    elif 7 <= utc_hour < 11:
+        return "Asia / Oceania 🇦🇺🇯🇵"
+    elif 11 <= utc_hour < 16:
+        return "Asia (China/India) 🇨🇳🇮🇳"
+    elif 16 <= utc_hour < 20:
+        return "Europe & Africa 🇪🇺🌍"
+    else:
+        return "Americas & Europe 🌎🌍"
+
+async def loot_region_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     
-    keyboard = [
-        [InlineKeyboardButton("Toggle Notifications", callback_data="loot_toggle")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=reply_markup)
+    region = get_most_active_region()
+    text = (
+        f"🗺️ **Most Active Region**\n\n"
+        f"Based on current global timezones, the most active player base right now is likely in:\n\n"
+        f"🌟 **{region}**"
+    )
+    keyboard = [[InlineKeyboardButton("⬅️ Back", callback_data="loot_back")]]
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
