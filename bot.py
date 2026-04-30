@@ -36,7 +36,10 @@ from commands.capital import cap_stats_cmd, cap_stats_callback
 from commands.audit import audit_cmd
 from commands.scraper import scrap_cmd, auto_scrap_job
 from commands.maintenance import maintenance_check_job, COMMAND_FROZEN_MSG
-from commands.forecaster import loot_notification_job, loot_cmd, loot_toggle_callback
+from commands.forecaster import (
+    loot_notification_job, loot_cmd, loot_toggle_callback,
+    loot_worldwide_callback, loot_region_callback, loot_back_callback
+)
 
 
 logging.basicConfig(
@@ -61,7 +64,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /audit <code>[tag]</code> — Player Rush Audit\n"
         "• /cap_stats <code>[tag]</code> — Capital Gold Rankings\n\n"
         "👑 <b>Admin Commands:</b>\n"
-        "• /clantrack <code>#CLANTAG</code> — Start Join/Leave/War logs\n"
+        "• /clantrack <code>[tag]</code> — Start Join/Leave/War logs\n"
         "• /deltrack — Stop tracking\n"
         "• /crnttrack — Tracked Clan Details\n"
         "• /scrap — Scrape latest TH max levels\n"
@@ -148,6 +151,9 @@ def main():
     app.add_handler(CallbackQueryHandler(track_config_callback, pattern=r"^tkcfg:.*"))
     app.add_handler(CallbackQueryHandler(cap_stats_callback, pattern=r"^capst:.*"))
     app.add_handler(CallbackQueryHandler(loot_toggle_callback, pattern=r"^loot_toggle$"))
+    app.add_handler(CallbackQueryHandler(loot_worldwide_callback, pattern=r"^loot_worldwide$"))
+    app.add_handler(CallbackQueryHandler(loot_region_callback, pattern=r"^loot_region$"))
+    app.add_handler(CallbackQueryHandler(loot_back_callback, pattern=r"^loot_back$"))
 
     # Background job: check clan changes every 30 seconds
     app.job_queue.run_repeating(check_clan_changes, interval=30, first=10)

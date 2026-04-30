@@ -94,13 +94,7 @@ def _save_data(data: dict):
         json.dump(data, f, indent=4)
 
 
-async def _get_player_info(coc_client: coc.Client, player_tag: str):
-    """Fetch TH level and XP level for a player."""
-    try:
-        player = await coc_client.get_player(player_tag)
-        return player.town_hall, player.exp_level
-    except Exception:
-        return "N/A", "N/A"
+
 
 
 # ── COC Client Setup ────────────────────────────────────────────────────────
@@ -158,7 +152,14 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
 
         # First run: just save members and return
         if "members" not in data or not data["members"]:
-            data["members"] = {t: {"name": m.name, "role": str(m.role)} for t, m in current_members.items()}
+            data["members"] = {
+                t: {
+                    "name": m.name, 
+                    "role": str(m.role),
+                    "town_hall": getattr(m, 'town_hall', 'N/A'),
+                    "exp_level": getattr(m, 'exp_level', 'N/A')
+                } for t, m in current_members.items()
+            }
             
             war_data = await get_clan_war(clan_tag)
             if "error" not in war_data and war_data.get("state") == "preparation":
@@ -178,9 +179,11 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
 
         # 1. Detect members who LEFT
         for tag in (prev_tags - curr_tags):
-            name = previous_members[tag]["name"]
+            member_data = previous_members[tag]
+            name = member_data["name"]
             if notif.get("join_leave", True):
-                th, xp = await _get_player_info(coc_client, tag)
+                th = member_data.get("town_hall", "N/A")
+                xp = member_data.get("exp_level", "N/A")
                 link = _player_link(name, tag)
                 text = (
                     f"❌ {link} has left the clan.\n"
@@ -195,7 +198,8 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
         for tag in (curr_tags - prev_tags):
             m = current_members[tag]
             if notif.get("join_leave", True):
-                th, xp = await _get_player_info(coc_client, tag)
+                th = getattr(m, 'town_hall', 'N/A')
+                xp = getattr(m, 'exp_level', 'N/A')
                 link = _player_link(m.name, tag)
                 text = (
                     f"✅ {link} has joined the clan!\n"
@@ -408,7 +412,14 @@ async def check_clan_changes(context: ContextTypes.DEFAULT_TYPE):
 
         # Update stored data if anything changed
         if prev_tags != curr_tags or changes_detected:
-            data["members"] = {t: {"name": m.name, "role": str(m.role)} for t, m in current_members.items()}
+            data["members"] = {
+                t: {
+                    "name": m.name, 
+                    "role": str(m.role),
+                    "town_hall": getattr(m, 'town_hall', 'N/A'),
+                    "exp_level": getattr(m, 'exp_level', 'N/A')
+                } for t, m in current_members.items()
+            }
             _save_data(data)
 
         print(f"--- [Job] Scan Complete. Found {len(current_members)} members. ---", flush=True)
@@ -444,7 +455,14 @@ async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = {
             "tracked_tag": new_tag,
-            "members": {m.tag: {"name": m.name, "role": str(m.role)} for m in clan.members},
+            "members": {
+                m.tag: {
+                    "name": m.name, 
+                    "role": str(m.role),
+                    "town_hall": getattr(m, 'town_hall', 'N/A'),
+                    "exp_level": getattr(m, 'exp_level', 'N/A')
+                } for m in clan.members
+            },
             "initiated_by": update.effective_user.first_name,
             "chat_id": str(update.effective_chat.id),
             "notifications": DEFAULT_NOTIFICATIONS.copy()
