@@ -1,5 +1,7 @@
 import asyncio
 import os
+import coc
+
 from datetime import datetime, timezone, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -100,7 +102,10 @@ def _th_roster(members: list) -> str:
     """Build TH breakdown from war members list, e.g. 'TH16×5 | TH15×8'."""
     if not members:
         return ""
-    th_counts = Counter(m.get('townhallLevel', 0) for m in members)
+    if hasattr(members[0], 'town_hall'):
+        th_counts = Counter(m.town_hall for m in members if getattr(m, 'town_hall', 0) > 0)
+    else:
+        th_counts = Counter(m.get('townhallLevel', 0) for m in members)
     parts = [f"TH{th}×{count}" for th, count in sorted(th_counts.items(), reverse=True) if th > 0]
     return "  " + " | ".join(parts) if parts else ""
 
@@ -120,6 +125,8 @@ def _fmt_remaining(dt: datetime | None, state: str) -> str:
     """Return a human-readable time remaining string, or empty string."""
     if not dt:
         return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     now = datetime.now(timezone.utc)
     diff = dt - now
     total_sec = int(diff.total_seconds())
@@ -576,28 +583,40 @@ async def clansorted_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def _cwl_round_markup(tag: str, round_idx: int, total_rounds: int, view: str = "round") -> InlineKeyboardMarkup:
     """Navigation keyboard for CWL rounds."""
+    keyboard = []
+    
+    # Pagination for rounds
     nav = []
     if round_idx > 0:
         nav.append(InlineKeyboardButton("◀️ Prev Round", callback_data=f"cwl_r:{view}:{tag}:{round_idx - 1}"))
     if round_idx < total_rounds - 1:
         nav.append(InlineKeyboardButton("Next Round ▶️", callback_data=f"cwl_r:{view}:{tag}:{round_idx + 1}"))
-    keyboard = []
     if nav:
         keyboard.append(nav)
+
+    # Overview Pages
     keyboard.append([
-        InlineKeyboardButton("📋 Group Overview", callback_data=f"cwl_r:overview:{tag}:0"),
-        InlineKeyboardButton("🗡️ Attacks", callback_data=f"cwl_r:attacks:{tag}:{round_idx}"),
+        InlineKeyboardButton("🏆 Leaderboard", callback_data=f"cwl_r:leaderboard:{tag}:{round_idx}")
     ])
+    keyboard.append([
+        InlineKeyboardButton("❌ Missed Hits", callback_data=f"cwl_r:missed:{tag}:{round_idx}")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("👥 Members roster", callback_data=f"cwl_r:all_members:{tag}:{round_idx}")
+    ])
+    if view != "round" and view != "overview":
+        keyboard.append([InlineKeyboardButton("◀️ Back to Round", callback_data=f"cwl_r:round:{tag}:{round_idx}")])
+        
     return InlineKeyboardMarkup(keyboard)
 
 
-def _cwl_overview_text(group: dict, clan_tag: str) -> str:
+def _cwl_overview_text(group, clan_tag: str) -> str:
     """Build CWL group overview: season, participating clans, round info."""
-    season = group.get('season', 'Unknown Season')
-    clans  = group.get('clans', [])
-    rounds = group.get('rounds', [])
+    season = group.season if group else 'Unknown Season'
+    clans  = group.clans if group else []
+    rounds = group.rounds if group else []
     total_rounds = len(rounds)
-    completed = sum(1 for r in rounds if any(wt != "#0" for wt in r.get('warTags', [])))
+    completed = sum(1 for r in rounds if any(wt != "#0" for wt in r))
 
     text = (
         f"🌟 **Clan War League — {season}**\n"
@@ -606,9 +625,9 @@ def _cwl_overview_text(group: dict, clan_tag: str) -> str:
         f"👥 Participating Clans ({len(clans)}):\n"
     )
     for i, c in enumerate(clans):
-        ctag  = c.get('tag', '?')
-        cname = c.get('name', 'Unknown')
-        clvl  = c.get('clanLevel', '?')
+        ctag  = c.tag
+        cname = c.name
+        clvl  = c.level
         icon  = "🏆" if ctag.upper() == clan_tag.upper() else "🛡️"
         text += f"  {icon} `{i+1}.` **{cname}** (Lvl {clvl}) `{ctag}`\n"
     return text
@@ -623,18 +642,26 @@ async def cwl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    coc_client = context.bot_data.get("coc_client")
+    if not coc_client:
+        await update.message.reply_text("❌ Bot is not connected to Clash of Clans API.")
+        return
+
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     msg = await update.message.reply_text("🌟 Fetching CWL group data...")
 
     # If player tag given, resolve to clan tag
-    pdata = await get_player(tag)
-    if "error" not in pdata and pdata.get('clan'):
-        tag = pdata['clan']['tag']
+    try:
+        player = await coc_client.get_player(tag)
+        if player.clan:
+            tag = player.clan.tag
+    except coc.NotFound:
+        pass
 
     norm_tag = tag.strip().upper()
-    group = await get_cwl_group(norm_tag)
-
-    if "error" in group:
+    try:
+        group = await coc_client.get_league_group(norm_tag)
+    except coc.NotFound:
         await msg.edit_text(
             "❌ CWL data not available.\n\n"
             "_CWL only runs for the first ~10 days of each month. "
@@ -642,31 +669,37 @@ async def cwl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         return
+    except coc.Maintenance:
+        await msg.edit_text("❌ Clash of Clans API is currently under maintenance.", parse_mode='Markdown')
+        return
+    except coc.PrivateWarLog:
+        await msg.edit_text("❌ This clan's war log is private.", parse_mode='Markdown')
+        return
+    except Exception as e:
+        await msg.edit_text(f"❌ Error fetching CWL data: {e}", parse_mode='Markdown')
+        return
 
     context.bot_data[f"cwl_{norm_tag}"] = group
 
-    overview_text = _cwl_overview_text(group, norm_tag)
-    rounds = group.get('rounds', [])
-    total_rounds = len(rounds)
+    rounds = group.rounds if group else []
 
     # Find latest active round
     latest = 0
     for i, r in enumerate(rounds):
-        if any(wt != "#0" for wt in r.get('warTags', [])):
+        if any(wt != "#0" for wt in r):
             latest = i
 
-    keyboard = []
-    if total_rounds > 0:
-        keyboard.append([InlineKeyboardButton(
-            f"⚔️ View Round {latest + 1}",
-            callback_data=f"cwl_r:round:{norm_tag}:{latest}"
-        )])
+    # Simulate a callback to jump straight to the latest round
+    class DummyQuery:
+        data = f"cwl_r:round:{norm_tag}:{latest}"
+        async def answer(self): pass
+        async def edit_message_text(self, text, parse_mode=None, reply_markup=None, disable_web_page_preview=None):
+            await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
 
-    await msg.edit_text(
-        overview_text, parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
-        disable_web_page_preview=True
-    )
+    class DummyUpdate:
+        callback_query = DummyQuery()
+
+    await cwl_callback(DummyUpdate(), context)
 
 
 async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -679,25 +712,27 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     norm_tag  = tag.strip().upper()
     round_idx = int(parts[3]) if len(parts) > 3 else 0
 
+    coc_client = context.bot_data.get("coc_client")
+    if not coc_client:
+        await query.edit_message_text("❌ Bot disconnected.")
+        return
+
     group = context.bot_data.get(f"cwl_{norm_tag}")
     if not group:
-        group = await get_cwl_group(norm_tag)
-        if "error" in group:
+        try:
+            group = await coc_client.get_league_group(norm_tag)
+            context.bot_data[f"cwl_{norm_tag}"] = group
+        except Exception:
             await query.edit_message_text("❌ CWL data expired. Run `/cwl` again.", parse_mode='Markdown')
             return
-        context.bot_data[f"cwl_{norm_tag}"] = group
 
-    rounds       = group.get('rounds', [])
+    rounds       = group.rounds if group else []
     total_rounds = len(rounds)
 
     if view == "overview":
         text = _cwl_overview_text(group, norm_tag)
-        latest = 0
-        for i, r in enumerate(rounds):
-            if any(wt != "#0" for wt in r.get('warTags', [])):
-                latest = i
-        kb = [[InlineKeyboardButton(f"⚔️ View Round {latest + 1}", callback_data=f"cwl_r:round:{norm_tag}:{latest}")]] if total_rounds > 0 else []
-        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb) if kb else None, disable_web_page_preview=True)
+        kb = _cwl_round_markup(norm_tag, round_idx, total_rounds, view)
+        await query.edit_message_text(text, parse_mode='Markdown', reply_markup=kb, disable_web_page_preview=True)
         return
 
     if round_idx >= total_rounds:
@@ -705,7 +740,7 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     round_data = rounds[round_idx]
-    war_tags   = [wt for wt in round_data.get('warTags', []) if wt != "#0"]
+    war_tags   = [wt for wt in round_data if wt != "#0"]
 
     if not war_tags:
         await query.edit_message_text(
@@ -717,48 +752,62 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Find the war that involves our clan
     our_war = None
     for wt in war_tags:
-        wdata = await get_cwl_war(wt)
-        if "error" not in wdata:
-            c_tag = wdata.get('clan', {}).get('tag', '').upper()
-            o_tag = wdata.get('opponent', {}).get('tag', '').upper()
-            if norm_tag in (c_tag, o_tag):
-                if o_tag == norm_tag:
-                    wdata['clan'], wdata['opponent'] = wdata['opponent'], wdata['clan']
+        try:
+            wdata = await coc_client.get_league_war(wt)
+            if norm_tag in (wdata.clan.tag, wdata.opponent.tag):
                 our_war = wdata
                 break
+        except Exception:
+            pass
 
     if not our_war:
-        our_war = await get_cwl_war(war_tags[0])
+        try:
+            our_war = await coc_client.get_league_war(war_tags[0])
+        except Exception:
+            pass
 
-    if not our_war or "error" in our_war:
+    if not our_war:
         await query.edit_message_text(
             f"❌ Could not load Round {round_idx + 1} war data.",
             reply_markup=_cwl_round_markup(norm_tag, round_idx, total_rounds, view)
         )
         return
 
-    c_name  = our_war.get('clan', {}).get('name', 'Clan')
-    c_stars = our_war.get('clan', {}).get('stars', 0)
-    c_dest  = our_war.get('clan', {}).get('destructionPercentage', 0)
-    o_name  = our_war.get('opponent', {}).get('name', 'Opponent')
-    o_stars = our_war.get('opponent', {}).get('stars', 0)
-    o_dest  = our_war.get('opponent', {}).get('destructionPercentage', 0)
-    w_state = our_war.get('state', 'unknown')
-    w_size  = our_war.get('teamSize', '?')
+    if our_war.clan.tag == norm_tag:
+        my_clan = our_war.clan
+        opp_clan = our_war.opponent
+    else:
+        my_clan = our_war.opponent
+        opp_clan = our_war.clan
+
+    c_name  = my_clan.name
+    c_stars = my_clan.stars
+    c_dest  = my_clan.destruction
+    c_members = my_clan.members or []
+    c_attacks = sum(len(m.attacks) for m in c_members)
+    
+    o_name  = opp_clan.name
+    o_tag   = opp_clan.tag
+    o_stars = opp_clan.stars
+    o_dest  = opp_clan.destruction
+    o_members = opp_clan.members or []
+    o_attacks = sum(len(m.attacks) for m in o_members)
+
+    w_state = our_war.state
+    w_size  = our_war.team_size
+    league_name = group.season if group else "Unknown Season"
 
     if w_state == 'preparation':
-        s_dt = _parse_coc_time(our_war.get('startTime', ''))
-        time_str    = _fmt_remaining(s_dt, "preparation")
-        state_label = "⚙️ Preparation"
+        time_str    = _fmt_remaining(getattr(our_war.start_time, "time", None), "preparation")
+        state_label = "In Prep"
     elif w_state == 'inWar':
-        e_dt = _parse_coc_time(our_war.get('endTime', ''))
-        time_str    = _fmt_remaining(e_dt, "inWar")
-        state_label = "🔥 In War"
+        time_str    = _fmt_remaining(getattr(our_war.end_time, "time", None), "inWar")
+        state_label = "In War"
     elif w_state == 'warEnded':
-        e_dt = _parse_coc_time(our_war.get('endTime', ''))
-        if e_dt:
-            ist_dt = e_dt + timedelta(hours=5, minutes=30)
-            time_str = f"\n⏰ War ended at: *{ist_dt.strftime('%H:%M')} IST*"
+        end_t = getattr(our_war.end_time, "time", None)
+        if end_t:
+            ist_dt = end_t + timedelta(hours=5, minutes=30)
+            time_str = f"\n⏰ Ended at: *{ist_dt.strftime('%H:%M')} IST*"
         else:
             time_str = "\n⏰ War ended"
         state_label = "War Ended"
@@ -771,35 +820,38 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         result_line = ""
 
+    c_roster = _th_roster(c_members)
+    o_roster = _th_roster(o_members)
+
     if view == "attacks":
         lines = [f"🗡️ **CWL Round {round_idx + 1} — All Attacks**\n{'─'*28}\n"]
         all_attacks_raw = []
-        all_members = our_war.get('clan', {}).get('members', []) + our_war.get('opponent', {}).get('members', [])
-        member_map  = {m.get('tag', ''): m for m in all_members}
+        all_members = list(c_members) + list(o_members)
+        member_map  = {m.tag: m for m in all_members}
         
-        for m in our_war.get('clan', {}).get('members', []):
-            mname = m.get('name', 'Unknown')
-            mth   = m.get('townhallLevel', '?')
-            for atk in m.get('attacks', []):
-                defender = member_map.get(atk.get('defenderTag', ''), {})
-                dname = defender.get('name', 'Unknown')
-                dth   = defender.get('townhallLevel', '?')
-                st    = atk.get('stars', 0)
-                dest  = atk.get('destructionPercentage', 0)
-                order = atk.get('order', 999)
+        for m in c_members:
+            mname = m.name
+            mth   = m.town_hall
+            for atk in m.attacks:
+                defender = member_map.get(atk.defender_tag)
+                dname = defender.name if defender else 'Unknown'
+                dth   = defender.town_hall if defender else '?'
+                st    = atk.stars
+                dest  = atk.destruction
+                order = atk.order
                 stars_str = '⭐' * st if st > 0 else '☆'
                 all_attacks_raw.append((order, f"`{order}.` {mname}(Th{mth}) ─────> {dname}(Th{dth}) {stars_str} ({dest}%)"))
 
-        for o in our_war.get('opponent', {}).get('members', []):
-            oname = o.get('name', 'Unknown')
-            oth   = o.get('townhallLevel', '?')
-            for atk in o.get('attacks', []):
-                defender = member_map.get(atk.get('defenderTag', ''), {})
-                dname = defender.get('name', 'Unknown')
-                dth   = defender.get('townhallLevel', '?')
-                st    = atk.get('stars', 0)
-                dest  = atk.get('destructionPercentage', 0)
-                order = atk.get('order', 999)
+        for o in o_members:
+            oname = o.name
+            oth   = o.town_hall
+            for atk in o.attacks:
+                defender = member_map.get(atk.defender_tag)
+                dname = defender.name if defender else 'Unknown'
+                dth   = defender.town_hall if defender else '?'
+                st    = atk.stars
+                dest  = atk.destruction
+                order = atk.order
                 stars_str = '⭐' * st if st > 0 else '☆'
                 all_attacks_raw.append((order, f"`{order}.` {dname}(Th{dth}) <───── {oname}(Th{oth}) {stars_str} ({dest}%)"))
 
@@ -811,15 +863,101 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines.extend(all_attacks)
         text = "\n".join(lines)
-    else:
+    elif view == "missed":
+        lines = [f"❌ **CWL Round {round_idx + 1} — Missed Hits**\n{'─'*28}\n"]
+        attacks_per_member = our_war.attacks_per_member
+        missed = []
+        for m in c_members:
+            atk_count = len(m.attacks)
+            if atk_count < attacks_per_member:
+                count = attacks_per_member - atk_count
+                ptag = m.tag.strip('#')
+                plink = f"https://link.clashofclans.com/en?action=OpenPlayerProfile&tag={ptag}"
+                missed.append(f"• {m.name} (TH{m.town_hall}) [#{ptag}]({plink}) — {count} missed")
+        if not missed:
+            lines.append("✅ **All attacks have been used!**")
+        else:
+            lines.extend(missed)
+        text = "\n".join(lines)
+    elif view == "all_members":
+        lines = [f"👥 **CWL Round {round_idx + 1} — Members roster**\n{'─'*28}\n"]
+        c_sorted = sorted(c_members, key=lambda x: x.map_position)
+        o_sorted = sorted(o_members, key=lambda x: x.map_position)
+        
+        for pos in range(w_size):
+            c_m = c_sorted[pos] if pos < len(c_sorted) else None
+            o_m = o_sorted[pos] if pos < len(o_sorted) else None
+            
+            if c_m:
+                c_name = c_m.name
+                c_tag = c_m.tag.strip('#')
+                c_link = f"https://link.clashofclans.com/en?action=OpenPlayerProfile&tag={c_tag}"
+                c_display = f"[{c_name}]({c_link})"
+            else:
+                c_display = "❓ Unknown"
+                
+            if o_m:
+                o_name = o_m.name
+                o_tag = o_m.tag.strip('#')
+                o_link = f"https://link.clashofclans.com/en?action=OpenPlayerProfile&tag={o_tag}"
+                o_display = f"[{o_name}]({o_link})"
+            else:
+                o_display = "❓ Unknown"
+                
+            lines.append(f"`{pos + 1}.` {c_display} <-> {o_display}")
+            
+        text = "\n".join(lines)
+    elif view == "leaderboard" or view == "rankings":
+        await query.edit_message_text("⏳ Aggregating full season leaderboard... This may take a moment.", parse_mode='Markdown')
+        war_map = context.bot_data.get(f"cwl_wars_{norm_tag}")
+        if not war_map:
+            war_tags = [wt for r in group.rounds for wt in r if wt != "#0"]
+            tasks = [coc_client.get_league_war(wt) for wt in war_tags]
+            wars = []
+            import asyncio
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if not isinstance(r, Exception):
+                    wars.append(r)
+            context.bot_data[f"cwl_wars_{norm_tag}"] = wars
+            war_map = wars
+            
+        clan_stats = {c.tag: {'name': c.name, 'stars': 0, 'dest': 0.0} for c in group.clans}
+        for w in war_map:
+            if w.state != 'preparation':
+                if w.clan.tag in clan_stats:
+                    clan_stats[w.clan.tag]['stars'] += w.clan.stars
+                    clan_stats[w.clan.tag]['dest'] += w.clan.destruction
+                if w.opponent.tag in clan_stats:
+                    clan_stats[w.opponent.tag]['stars'] += w.opponent.stars
+                    clan_stats[w.opponent.tag]['dest'] += w.opponent.destruction
+                    
+        sorted_clans = sorted(clan_stats.values(), key=lambda x: (x['stars'], x['dest']), reverse=True)
+        
+        lines = [f"🏆 **Season Leaderboard ({league_name})**\n{'─' * 28}\n"]
+        for i, c in enumerate(sorted_clans):
+            icon = "🌟" if i == 0 else "⭐"
+            lines.append(f"`{i+1}.` **{c['name']}**")
+            lines.append(f"   {icon} Stars: `{c['stars']}` | 💥 Dest: `{c['dest']:.1f}%`\n")
+            
+        text = "\n".join(lines)
+    else: # Default round overview
         text = (
-            f"🌟 **CWL — Round {round_idx + 1}/{total_rounds}** ({state_label})\n"
-            f"👥 {w_size}v{w_size}{time_str}{result_line}\n"
-            f"{'─' * 30}\n"
+            f"**{c_name}**\n\n"
+            f"**War Against**\n"
+            f"[{o_name} ({o_tag})](https://link.clashofclans.com/en?action=OpenClanProfile&tag=%23{o_tag.replace('#', '')})\n\n"
+            f"**War State**\n"
+            f"CWL {league_name} - Round {round_idx + 1}/{total_rounds}\n"
+            f"{state_label} ({w_size} vs {w_size}){time_str}{result_line}\n\n"
+            f"**War Stats**\n"
+            f"⚔️ `{c_attacks}/{w_size}`  —  `{o_attacks}/{w_size}`\n"
+            f"⭐ `{c_stars}`  —  `{o_stars}`\n"
+            f"💥 `{c_dest:.1f}%`  —  `{o_dest:.1f}%`\n\n"
+            f"**War Composition**\n"
             f"🛡️ **{c_name}**\n"
-            f"  ⭐ Stars: {c_stars}   💥 Dest: {c_dest:.1f}%\n\n"
+            f"{c_roster}\n"
             f"🏴 **{o_name}**\n"
-            f"  ⭐ Stars: {o_stars}   💥 Dest: {o_dest:.1f}%\n"
+            f"{o_roster}\n"
         )
 
     if len(text) > 4096:
@@ -830,7 +968,3 @@ async def cwl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=_cwl_round_markup(norm_tag, round_idx, total_rounds, view),
         disable_web_page_preview=True
     )
-
-
-
-

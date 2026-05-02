@@ -107,7 +107,7 @@ async def setup_coc_client(app):
         logging.warning("COC_EMAIL / COC_PASSWORD not set - tracking commands disabled.")
         return
 
-    coc_client = coc.Client(load_game_data=coc.LoadGameData.always)
+    coc_client = coc.Client(load_game_data=coc.LoadGameData(always=True))
     try:
         await coc_client.login(email, password)
         app.bot_data["coc_client"] = coc_client
